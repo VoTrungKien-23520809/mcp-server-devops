@@ -24,14 +24,12 @@ pipeline {
             }
         }
 
-        // --- TRẠM KIỂM DUYỆT DEVSECOPS ---
         stage('Security Scan (Trivy)') {
             steps {
-                echo 'Scanning Docker image for CRITICAL vulnerabilities...'
-                // Quét và hiển thị lỗi nghiêm trọng dưới dạng bảng. 
-                // Tạm thời chưa dùng cờ --exit-code 1 để Pipeline không bị báo đỏ ngay lần đầu.
-                sh "trivy image --severity CRITICAL ${IMAGE_TAG}"
-                echo '✅ Security scan completed!'
+                echo 'Quét lỗi bảo mật nghiêm trọng trong Docker image...'
+                // Ép Trivy tải database từ ghcr.io thay vì gcr.io bị lỗi 404
+                sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL ${IMAGE_TAG}"
+                echo '✅ Đã quét xong!'
             }
         }
 
