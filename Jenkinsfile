@@ -12,7 +12,10 @@ pipeline {
         
         stage('Build Docker Image') {
             steps {
-                echo '⏳ Docker build command will be added later...'
+                echo 'Building the Python Docker image for MCP Server...'
+                // Lệnh đóng gói image với tag là latest
+                sh 'docker build -t mcp-server-app:latest .'
+                echo '✅ Docker image built successfully!'
             }
         }
     }
