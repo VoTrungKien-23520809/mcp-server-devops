@@ -15,6 +15,21 @@ pipeline {
                 echo '✅ Code checkout successful!'
             }
         }
+  
+        stage('Soi Code (SonarQube Analysis)') {
+            steps {
+                // Gọi cái máy soi đã cài ở bước 1 ra xài
+                script {
+                    def scannerHome = tool 'sonar-scanner'
+                    withSonarQubeEnv('sonar-server') {
+                        sh "${scannerHome}/bin/sonar-scanner \
+                        -Dsonar.projectKey=mcp-server-devops \
+                        -Dsonar.sources=. \
+                        -Dsonar.python.version=3"
+                    }
+                }
+            }
+        }
         
         stage('Build Docker Image') {
             steps {
