@@ -27,9 +27,11 @@ pipeline {
         stage('Security Scan (Trivy)') {
             steps {
                 echo 'Quét lỗi bảo mật nghiêm trọng trong Docker image...'
-                // Ép Trivy tải database từ ghcr.io thay vì gcr.io bị lỗi 404
-                sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL ${IMAGE_TAG}"
-                echo '✅ Đã quét xong!'
+                
+                // Thêm cờ --exit-code 1: Có lỗi là báo đỏ Pipeline ngay lập tức
+                sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL --exit-code 1 ${IMAGE_TAG}"
+                
+                echo '✅ Đã quét xong, không phát hiện lỗi CRITICAL!'
             }
         }
 
