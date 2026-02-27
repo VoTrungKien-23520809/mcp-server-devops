@@ -88,5 +88,22 @@ pipeline {
                 echo '✅ Image successfully pushed to Docker Hub Registry!'
             }
         }
+
+        stage('Deploy to K3s (Staging)') {
+            steps {
+                echo 'Deploying application to K3s Staging environment...'
+                sh '''
+                # Trỏ đường dẫn để Jenkins có quyền ra lệnh cho K3s
+                export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+                
+                # Áp dụng file cấu hình vừa tạo
+                kubectl apply -f k8s/staging-deployment.yaml
+                
+                # Khởi động lại deployment để K3s kéo image mới nhất về
+                kubectl rollout restart deployment/mcp-server-deployment -n staging
+                '''
+                echo '✅ Deployment to Staging successful!'
+            }
+        }
     }
 }

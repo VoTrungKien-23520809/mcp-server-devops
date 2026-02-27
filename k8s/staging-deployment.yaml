@@ -1,0 +1,27 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging # Tạo một khu vực riêng biệt gọi là staging
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-server-deployment
+  namespace: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-server
+  template:
+    metadata:
+      labels:
+        app: mcp-server
+    spec:
+      containers:
+      - name: mcp-server
+        image: kienvo2110/mcp-server-app:latest # Lấy image từ kho Docker Hub của ông
+        imagePullPolicy: Always
+        # Lệnh này giúp container cứ chạy nền mãi để mình vào test, thay vì chạy xong tắt luôn
+        command: ["tail", "-f", "/dev/null"]
