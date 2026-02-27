@@ -25,6 +25,7 @@ pipeline {
                         sh "${scannerHome}/bin/sonar-scanner \
                         -Dsonar.projectKey=mcp-server-devops \
                         -Dsonar.sources=. \
+                        -Dsonar.exclusions=venv/**,**/*.pyc \
                         -Dsonar.python.version=3"
                     }
                 }
