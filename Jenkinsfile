@@ -30,6 +30,15 @@ pipeline {
                 }
             }
         }
+
+        stage('IaC Security Scan (Checkov)') {
+            steps {
+                echo 'Scanning Terraform files with Checkov...'
+                // Quét thư mục hiện tại. Bỏ qua lỗi nhẹ (--soft-fail) để tránh sập Pipeline.
+                sh 'checkov -d . --soft-fail'
+                echo '✅ IaC scan completed!'
+            }
+        }
         
         stage('Build Docker Image') {
             steps {
