@@ -1,0 +1,45 @@
+---
+- name: Setup Azure VM for DevOps Project
+  hosts: azure_vm
+  become: yes # Chạy lệnh với quyền sudo
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install required basic packages
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Add azureuser to docker group
+      user:
+        name: azureuser
+        groups: docker
+        append: yes
+
+    - name: Start SonarQube container
+      command: docker run -d --name sonarqube -p 9000:9000 sonarqube:lts-community
+      register: sonar_result
+      failed_when: 
+        - sonar_result.rc != 0
+        - "'Conflict' not in sonar_result.stderr" # Bỏ qua lỗi nếu container đã chạy
+
+    - name: Install K3s (Lightweight Kubernetes)
+      shell: curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s # Bỏ qua nếu đã cài K3s
+
+    - name: Grant read permission to k3s config
+      file:
+        path: /etc/rancher/k3s/k3s.yaml
+        mode: '0644'
