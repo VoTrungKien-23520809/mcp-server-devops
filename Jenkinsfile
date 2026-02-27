@@ -15,6 +15,22 @@ pipeline {
                 echo '✅ Code checkout successful!'
             }
         }
+
+        stage('Unit Test') {
+            steps {
+                echo 'Running Python Unit Tests...'
+                sh '''
+                # Tạo môi trường ảo và cài thư viện
+                python3 -m venv venv
+                . venv/bin/activate
+                pip install -r requirements.txt
+                
+                # Chạy test
+                pytest test_main.py
+                '''
+                echo '✅ All tests passed successfully!'
+            }
+        }
   
         stage('Soi Code (SonarQube Analysis)') {
             steps {
