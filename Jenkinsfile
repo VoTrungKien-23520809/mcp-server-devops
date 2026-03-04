@@ -34,7 +34,7 @@ pipeline {
   
         stage('Soi Code (SonarQube Analysis)') {
             steps {
-                // Gọi cái máy soi đã cài ở bước 1 ra xài
+                // Gọi cái máy soi đã cài ở bước 1
                 script {
                     def scannerHome = tool 'sonar-scanner'
                     withSonarQubeEnv('sonar-server') {

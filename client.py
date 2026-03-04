@@ -13,12 +13,12 @@ def ask_ai(prompt_text):
     }
     try:
         response = requests.post(url, json=payload)
-        return response.json().get("response", "AI không phản hồi.")
+        return response.json().get("response", "AI is not responding.")
     except Exception as e:
-        return f"Lỗi kết nối AI: {e}"
+        return f"AI connection error: {e}"
 
 async def main():
-    print("1. Đang kết nối với MCP Server...")
+    print("1. Connecting to the MCP Server...")
     # Cấu hình để tự động chạy file server.py
     server_params = StdioServerParameters(
         command="python",
@@ -29,21 +29,21 @@ async def main():
         async with ClientSession(read, write) as session:
             await session.initialize()
             
-            print("2. Đang yêu cầu MCP Server chọc vào hạ tầng K3s...")
+            print("2. Requesting the MCP Server to access the K3s infrastructure...")
             # Gọi tool mà chúng ta đã định nghĩa trong server.py
             result = await session.call_tool("get_k8s_nodes", arguments={})
             raw_k8s_data = result.content[0].text
             
-            print("\n--- [Dữ liệu K3s thô lấy được] ---")
+            print("\n--- [Raw K3s data retrieved] ---")
             print(raw_k8s_data)
             print("----------------------------------\n")
             
-            print("3. Đang gửi dữ liệu cho AI phân tích...\n")
+            print("3. Sending data to AI for analysis...\n")
             # Tạo câu lệnh (prompt) nhờ AI đọc dữ liệu thô
-            prompt = f"Dưới đây là thông tin các node trong hệ thống Kubernetes của tôi:\n{raw_k8s_data}\n\nHãy phân tích và cho tôi biết hệ thống đang có bao nhiêu node, gồm những loại nào và trạng thái hiện tại ra sao bằng tiếng Việt ngắn gọn."
+            prompt = f"Here are the details of the nodes in my Kubernetes cluster:\n{raw_k8s_data}\n\nPlease analyze and tell me how many nodes are in the system, what types they are, and their current status in brief Vietnamese."
             
             ai_response = ask_ai(prompt)
-            print("🤖 [AI Trả lời]:")
+            print("🤖 [AI Response]:")
             print(ai_response)
 
 if __name__ == "__main__":

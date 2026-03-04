@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
       - name: mcp-server
-        image: kienvo2110/mcp-server-app:latest # Lấy image từ kho Docker Hub của ông
+        image: kienvo2110/mcp-server-app:latest # Lấy image từ kho Docker Hub
         imagePullPolicy: Always
-        # Lệnh này giúp container cứ chạy nền mãi để mình vào test, thay vì chạy xong tắt luôn
+        # Lệnh này giúp container cứ chạy nền mãi để test, thay vì chạy xong tắt luôn
         command: ["tail", "-f", "/dev/null"]
