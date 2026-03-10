@@ -3,3 +3,6 @@
 *.tfstate.backup
 .terraform.lock.hcl
 kubectl
+venv/
+__pycache__/
+.env

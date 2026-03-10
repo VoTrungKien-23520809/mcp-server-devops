@@ -67,12 +67,12 @@ pipeline {
 
         stage('Security Scan (Trivy)') {
             steps {
-                echo 'Quét lỗi bảo mật nghiêm trọng trong Docker image...'
+                echo 'Scanning the Docker image for critical vulnerabilities...'
                 
                 // Thêm cờ --exit-code 1: Có lỗi là báo đỏ Pipeline ngay lập tức
                 sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL --exit-code 1 ${IMAGE_TAG}"
                 
-                echo '✅ Đã quét xong, không phát hiện lỗi CRITICAL!'
+                echo '✅ Scan completed. No CRITICAL issues detected!'
             }
         }
 
