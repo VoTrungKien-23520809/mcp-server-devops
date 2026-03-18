@@ -7,13 +7,16 @@
     - name: Update apt cache
       apt:
         update_cache: yes
+        cache_valid_time: 3600
 
     - name: Install required basic packages
       apt:
         name:
+          - ca-certificates
           - curl
           - wget
           - git
+          - python3-pip
         state: present
 
     - name: Install Docker
@@ -27,19 +30,27 @@
         groups: docker
         append: yes
 
+    - name: Ensure Docker service is enabled and running
+      service:
+        name: docker
+        enabled: yes
+        state: started
+
     - name: Start SonarQube container
-      command: docker run -d --name sonarqube -p 9000:9000 sonarqube:lts-community
+      shell: |
+        docker ps -a --format '{{"{{"}}.Names{{"}}"}}' | grep -qx sonarqube || \
+        docker run -d --name sonarqube -p 9000:9000 sonarqube:lts-community
       register: sonar_result
       failed_when: 
         - sonar_result.rc != 0
         - "'Conflict' not in sonar_result.stderr" # Bỏ qua lỗi nếu container đã chạy
 
     - name: Install K3s (Lightweight Kubernetes)
-      shell: curl -sfL https://get.k3s.io | sh -
+      shell: curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='server --write-kubeconfig-mode 600' sh -
       args:
         creates: /usr/local/bin/k3s # Bỏ qua nếu đã cài K3s
 
-    - name: Grant read permission to k3s config
+    - name: Restrict k3s config permissions
       file:
         path: /etc/rancher/k3s/k3s.yaml
-        mode: '0644'
+        mode: '0600'

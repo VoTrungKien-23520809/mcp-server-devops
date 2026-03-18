@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # 1. Kích hoạt Khiên bảo mật: Tải biến môi trường từ file ẩn .env
 load_dotenv()
 
-# 2. Bật Radar theo dõi: Cấu hình hệ thống Logging chuẩn như Codex
+# 2. Bật Radar theo dõi
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
