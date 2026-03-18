@@ -1,3 +1,5 @@
 mcp
 mcp[cli]
 pytest
+requests
+python-dotenv
