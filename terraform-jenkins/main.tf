@@ -18,10 +18,48 @@ provider "azurerm" {
   features {}
 }
 
+variable "location" {
+  description = "Azure region for all resources"
+  type        = string
+  default     = "japaneast"
+}
+
+variable "admin_username" {
+  description = "Admin username for the Jenkins VM"
+  type        = string
+  default     = "azureuser"
+}
+
+variable "public_key_path" {
+  description = "Path to the SSH public key used for VM login"
+  type        = string
+  default     = "~/.ssh/id_rsa.pub"
+}
+
+variable "admin_allowed_cidrs" {
+  description = "Allowed CIDR blocks for SSH access"
+  type        = list(string)
+
+  validation {
+    condition     = length(var.admin_allowed_cidrs) > 0
+    error_message = "admin_allowed_cidrs must include at least one trusted CIDR block."
+  }
+}
+
+variable "jenkins_allowed_cidrs" {
+  description = "Allowed CIDR blocks for Jenkins web access"
+  type        = list(string)
+
+  validation {
+    condition     = length(var.jenkins_allowed_cidrs) > 0
+    error_message = "jenkins_allowed_cidrs must include at least one trusted CIDR block."
+  }
+}
+
 # 1. Tạo Resource Group (Nhóm tài nguyên)
 resource "azurerm_resource_group" "jenkins_rg" {
   name     = "Jenkins-DevOps-RG"
-  location = "japaneast"
+  location = var.location
 }
 
 # 2. Tạo Mạng ảo (VNet & Subnet)
@@ -68,7 +106,8 @@ resource "azurerm_linux_virtual_machine" "jenkins_vm" {
   resource_group_name = azurerm_resource_group.jenkins_rg.name
   location            = azurerm_resource_group.jenkins_rg.location
   size                = "Standard_D2s_v3"
-  admin_username      = "azureuser"
+  admin_username      = var.admin_username
+  disable_password_authentication = true
   
   network_interface_ids = [
     azurerm_network_interface.jenkins_nic.id,
@@ -76,8 +115,8 @@ resource "azurerm_linux_virtual_machine" "jenkins_vm" {
 
   # Tự động gắn khóa SSH vừa tạo
   admin_ssh_key {
-    username   = "azureuser"
-    public_key = file("~/.ssh/id_rsa.pub") 
+    username   = var.admin_username
+    public_key = file(var.public_key_path)
   }
 
   os_disk {
@@ -112,7 +151,7 @@ resource "azurerm_network_security_group" "jenkins_nsg" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "22"
-    source_address_prefix      = "*"
+    source_address_prefixes    = var.admin_allowed_cidrs
     destination_address_prefix = "*"
   }
 
@@ -124,7 +163,7 @@ resource "azurerm_network_security_group" "jenkins_nsg" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "8080"
-    source_address_prefix      = "*"
+    source_address_prefixes    = var.jenkins_allowed_cidrs
     destination_address_prefix = "*"
   }
 }

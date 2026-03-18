@@ -1,10 +1,17 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
     environment {
         DOCKER_HUB_USER = "kienvo2110"
         APP_NAME = "mcp-server-app"
-        IMAGE_TAG = "${DOCKER_HUB_USER}/${APP_NAME}:latest"
+        IMAGE_REPO = "${DOCKER_HUB_USER}/${APP_NAME}"
+        K8S_NAMESPACE = "staging"
+        K8S_DEPLOYMENT = "mcp-server-deployment"
     }
 
     stages {
@@ -16,16 +23,28 @@ pipeline {
             }
         }
 
+        stage('Prepare Build Metadata') {
+            steps {
+                script {
+                    env.GIT_SHA = sh(returnStdout: true, script: 'git rev-parse --short=8 HEAD').trim()
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_SHA}"
+                    env.IMAGE_REF = "${env.IMAGE_REPO}:${env.IMAGE_TAG}"
+                }
+                echo "Image to build: ${env.IMAGE_REF}"
+            }
+        }
+
         stage('Unit Test') {
             steps {
                 echo 'Running Python Unit Tests...'
                 sh '''
-                # Tạo môi trường ảo và cài thư viện
+                #!/usr/bin/env bash
+                set -e
                 python3 -m venv venv
                 . venv/bin/activate
+                pip install --upgrade pip
                 pip install -r requirements.txt
-                
-                # Chạy test
+
                 pytest test_main.py
                 '''
                 echo '✅ All tests passed successfully!'
@@ -51,28 +70,24 @@ pipeline {
         stage('IaC Security Scan (Checkov)') {
             steps {
                 echo 'Scanning Terraform files with Checkov...'
-                // Quét thư mục hiện tại. Bỏ qua lỗi nhẹ (--soft-fail) để tránh sập Pipeline.
-                sh 'checkov -d . --soft-fail'
+                sh 'checkov -d terraform-jenkins --framework terraform --quiet'
                 echo '✅ IaC scan completed!'
             }
         }
         
         stage('Build Docker Image') {
             steps {
-                echo "Building the Python Docker image: ${IMAGE_TAG}..."
-                sh "docker build -t ${IMAGE_TAG} ."
+                echo "Building the Python Docker image: ${env.IMAGE_REF}..."
+                sh "docker build -t ${env.IMAGE_REF} ."
                 echo '✅ Docker image built successfully!'
             }
         }
 
         stage('Security Scan (Trivy)') {
             steps {
-                echo 'Scanning the Docker image for critical vulnerabilities...'
-                
-                // Thêm cờ --exit-code 1: Có lỗi là báo đỏ Pipeline ngay lập tức
-                sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL --exit-code 1 ${IMAGE_TAG}"
-                
-                echo '✅ Scan completed. No CRITICAL issues detected!'
+                echo 'Scanning the Docker image for high and critical vulnerabilities...'
+                sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity HIGH,CRITICAL --exit-code 1 ${env.IMAGE_REF}"
+                echo '✅ Scan completed. No HIGH/CRITICAL issues detected!'
             }
         }
 
@@ -81,8 +96,10 @@ pipeline {
                 echo 'Pushing the image to Docker Hub...'
                 withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
                     sh '''
+                        #!/usr/bin/env bash
+                        set -e
                         echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push ''' + "${IMAGE_TAG}" + '''
+                        docker push ''' + "${IMAGE_REF}" + '''
                     '''
                 }
                 echo '✅ Image successfully pushed to Docker Hub Registry!'
@@ -93,17 +110,31 @@ pipeline {
             steps {
                 echo 'Deploying application to K3s Staging environment...'
                 sh '''
-                # Trỏ đường dẫn để Jenkins có quyền ra lệnh cho K3s
+                #!/usr/bin/env bash
+                set -e
                 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-                
-                # Áp dụng file cấu hình vừa tạo
+
                 kubectl apply -f k8s/staging-deployment.yaml
-                
-                # Khởi động lại deployment để K3s kéo image mới nhất về
-                kubectl rollout restart deployment/mcp-server-deployment -n staging
+                kubectl -n ${K8S_NAMESPACE} set image deployment/${K8S_DEPLOYMENT} mcp-server=${IMAGE_REF}
+                kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${K8S_NAMESPACE} --timeout=120s
                 '''
                 echo '✅ Deployment to Staging successful!'
             }
+        }
+    }
+
+    post {
+        failure {
+            echo 'Pipeline failed. Attempting automatic rollback...'
+            sh '''
+            #!/usr/bin/env bash
+            set +e
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            kubectl rollout undo deployment/${K8S_DEPLOYMENT} -n ${K8S_NAMESPACE}
+            '''
+        }
+        always {
+            sh 'docker image prune -f || true'
         }
     }
 }
