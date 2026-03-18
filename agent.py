@@ -22,25 +22,26 @@ async def run_agent():
             print("✅ Successfully connected to MCP Server!")
             
             # Call get_terraform_plan Tool
-            print("\n🤖 Requesting MCP Server to run Terraform Plan...")
-            tf_result = await session.call_tool(
-                "get_terraform_plan", 
-                arguments={"tf_directory": "./terraform-jenkins"}
+            print("\n🤖 Đang yêu cầu MCP Server lấy log Jenkins...")
+            
+            jenkins_result = await session.call_tool(
+                "get_jenkins_logs", 
+                arguments={"job_name": "mcp-server-pipeline", "build_number": "lastBuild"}
             )
             
-            tf_output = tf_result.content[0].text
-            print("✅ Terraform log retrieved! Passing to Qwen for analysis...\n")
+            log_output = jenkins_result.content[0].text
+            print("✅ Đã lấy được log Jenkins! Đang chuyển cho Qwen phân tích...\n")
             
-            # Prompt the LLM in English for better tech context
+            # Đổi Prompt để AI đóng vai chuyên gia chẩn đoán CI/CD
             prompt = f"""
-            You are a DevOps and SRE expert. Please analyze the following Terraform Plan output and provide a concise report STRICTLY IN VIETNAMESE. 
+            You are a DevOps and SRE expert. Please analyze the following Jenkins Build Log and provide a concise report STRICTLY IN VIETNAMESE. 
             
             Báo cáo cần có 2 phần:
-            1. Hạ tầng sắp có những thay đổi gì?
-            2. Có rủi ro bảo mật hay hành động nguy hiểm nào không (ví dụ: mở port bừa bãi, xóa tài nguyên quan trọng)?
+            1. Nguyên nhân chính khiến Pipeline bị lỗi (hoặc thành công) là gì?
+            2. Đề xuất cách sửa lỗi cụ thể (ví dụ: cần cài thêm thư viện gì, sửa lại cú pháp nào, hay kiểm tra quyền truy cập nào).
             
-            TERRAFORM OUTPUT:
-            {tf_output}
+            JENKINS LOG OUTPUT:
+            {log_output}
             """
             
             print(f"🧠 {Model_name} is analyzing (GPU is processing, please wait)...\n")
