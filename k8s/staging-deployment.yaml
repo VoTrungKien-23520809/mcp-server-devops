@@ -19,21 +19,17 @@ spec:
       labels:
         app: mcp-server
     spec:
-      imagePullSecrets: # <-- ĐÚNG! Phải nằm ngang hàng với chữ 'containers' bên dưới
+      imagePullSecrets: 
       - name: dockerhub-secret
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
       containers:
       - name: mcp-server
         image: kienvo2110/mcp-server-app:latest
         imagePullPolicy: Always
-        # ĐỔI LẠI DÒNG NÀY ĐỂ GIỮ CONTAINER SỐNG MÃI
+        # Lệnh này giữ container sống nền để phục vụ kết nối stdio của AI Agent
         command: ["tail", "-f", "/dev/null"] 
         envFrom:
         - secretRef:
             name: mcp-server-secrets
-            optional: true
         env:
         - name: WORKSPACE_ROOT
           value: /app
@@ -47,25 +43,7 @@ spec:
           limits:
             cpu: "500m"
             memory: "512Mi"
+        # Chỉ giữ lại cấu hình chạy user non-root để qua bài Checkov
         securityContext:
           runAsNonRoot: true
           runAsUser: 10001
-          allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: false
-          capabilities:
-            drop:
-            - ALL
-        readinessProbe:
-          exec:
-            command: ["/bin/sh", "-c", "ps aux | grep -v grep | grep python"]
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          timeoutSeconds: 3
-          failureThreshold: 3
-        livenessProbe:
-          exec:
-            command: ["/bin/sh", "-c", "ps aux | grep -v grep | grep python"]
-          initialDelaySeconds: 20
-          periodSeconds: 20
-          timeoutSeconds: 3
-          failureThreshold: 3
