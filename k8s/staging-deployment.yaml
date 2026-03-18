@@ -54,14 +54,14 @@ spec:
             - ALL
         readinessProbe:
           exec:
-            command: ["/bin/sh", "-c", "pgrep -f 'python main.py' >/dev/null"]
+            command: ["/bin/sh", "-c", "ps aux | grep -v grep | grep python"]
           initialDelaySeconds: 10
           periodSeconds: 10
           timeoutSeconds: 3
           failureThreshold: 3
         livenessProbe:
           exec:
-            command: ["/bin/sh", "-c", "pgrep -f 'python main.py' >/dev/null"]
+            command: ["/bin/sh", "-c", "ps aux | grep -v grep | grep python"]
           initialDelaySeconds: 20
           periodSeconds: 20
           timeoutSeconds: 3
