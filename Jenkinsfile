@@ -26,7 +26,7 @@ pipeline {
                 pip install -r requirements.txt
                 
                 # Chạy test
-                pytest test_main.py
+                pytest_loi_roi test_main.py
                 '''
                 echo '✅ All tests passed successfully!'
             }
