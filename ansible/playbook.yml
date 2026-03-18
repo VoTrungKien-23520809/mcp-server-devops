@@ -53,4 +53,4 @@
     - name: Restrict k3s config permissions
       file:
         path: /etc/rancher/k3s/k3s.yaml
-        mode: '0600'
+        mode: '0644'

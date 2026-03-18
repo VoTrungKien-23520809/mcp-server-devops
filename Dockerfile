@@ -1,17 +1,20 @@
-# Sử dụng image Python 3.11 phiên bản slim (nhẹ và tối ưu cho môi trường production)
 FROM python:3.11-slim
 
-# Thiết lập thư mục làm việc bên trong Container
+ENV PYTHONDONTWRITEBYTECODE=1 \
+	PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Copy file cấu hình thư viện vào trước để tận dụng cache của Docker
 COPY requirements.txt .
 
-# Cài đặt các thư viện cần thiết
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+	pip install --no-cache-dir -r requirements.txt
 
-# Copy toàn bộ mã nguồn dự án vào Container
 COPY . .
 
-# Lệnh khởi chạy MCP Server 
+RUN useradd --create-home --uid 10001 appuser && \
+	chown -R appuser:appuser /app
+
+USER appuser
+
 CMD ["python", "main.py"]
