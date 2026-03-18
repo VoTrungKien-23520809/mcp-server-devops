@@ -26,7 +26,7 @@ spec:
         image: kienvo2110/mcp-server-app:latest
         imagePullPolicy: Always
         # Lệnh này giữ container sống nền để phục vụ kết nối stdio của AI Agent
-        command: ["tail", "-f", "/dev/null"] 
+        command: ["/bin/sh", "-c", "python main.py & while true; do sleep 30; done;"]
         envFrom:
         - secretRef:
             name: mcp-server-secrets
