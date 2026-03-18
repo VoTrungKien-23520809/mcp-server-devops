@@ -28,7 +28,8 @@ spec:
       - name: mcp-server
         image: kienvo2110/mcp-server-app:latest
         imagePullPolicy: Always
-        command: ["python", "main.py"]
+        # ĐỔI LẠI DÒNG NÀY ĐỂ GIỮ CONTAINER SỐNG MÃI
+        command: ["tail", "-f", "/dev/null"] 
         envFrom:
         - secretRef:
             name: mcp-server-secrets
