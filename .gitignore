@@ -6,3 +6,4 @@ kubectl
 venv/
 __pycache__/
 .env
+venv/

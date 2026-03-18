@@ -23,7 +23,10 @@ pipeline {
                 #!/usr/bin/env bash
                 set -e
                 
-                # Tạo môi trường ảo
+                # Quét sạch tàn dư cũ (nếu có)
+                rm -rf venv
+                
+                # Tạo môi trường ảo mới tinh trên chính máy Jenkins
                 python3 -m venv venv
                 
                 # ÉP CHẠY PIP VÀ PYTEST CỦA ĐÚNG CÁI VENV ĐÓ
