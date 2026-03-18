@@ -20,7 +20,7 @@ logger = logging.getLogger("devops_mcp_server")
 # Khởi tạo MCP Server
 mcp = FastMCP("devops-mcp-server")
 
-# 3. Lấy thông tin cấu hình từ két sắt (Không còn Hardcode lộ liễu)
+# 3. Lấy thông tin cấu hình từ két sắt
 JENKINS_URL = os.getenv("JENKINS_URL")
 JENKINS_USER = os.getenv("JENKINS_USER")
 JENKINS_TOKEN = os.getenv("JENKINS_TOKEN")
@@ -117,6 +117,16 @@ def read_code_context(file_path: str) -> str:
     except Exception as e:
         logger.error(f"Lỗi khi đọc file {file_path}: {str(e)}")
         return f"Error reading file '{file_path}': {str(e)}"
+
+# Tool 5: Soi Cluster
+@mcp.tool()
+def get_k8s_nodes() -> str:
+    """Retrieve the current status of the nodes in the K3s cluster."""
+    try:
+        result = subprocess.run(["kubectl", "get", "nodes", "-o", "wide"], capture_output=True, text=True, check=True, timeout=KUBECTL_TIMEOUT)
+        return f"Dữ liệu từ Cluster:\n{result.stdout.strip()}"
+    except Exception as e:
+        return f"Lỗi khi gọi kubectl: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()
