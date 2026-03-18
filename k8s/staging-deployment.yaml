@@ -19,6 +19,8 @@ spec:
       labels:
         app: mcp-server
     spec:
+      imagePullSecrets: # <-- ĐÚNG! Phải nằm ngang hàng với chữ 'containers' bên dưới
+      - name: dockerhub-secret
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -26,8 +28,6 @@ spec:
       - name: mcp-server
         image: kienvo2110/mcp-server-app:latest
         imagePullPolicy: Always
-        imagePullSecrets:
-        - name: dockerhub-secret
         command: ["python", "main.py"]
         envFrom:
         - secretRef:
