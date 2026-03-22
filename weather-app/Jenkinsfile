@@ -1,0 +1,68 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_HUB_USER = "trgqn" 
+        APP_NAME = "meteo-hist" 
+        IMAGE_TAG = "${DOCKER_HUB_USER}/${APP_NAME}:latest"
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                echo 'Fetching the latest weather app code from GitHub...'
+                checkout scm 
+                echo '✅ Code checkout successful!'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('weather-app'){
+                    echo "Building the Docker image: ${IMAGE_TAG}..."
+                    sh "docker build -t ${IMAGE_TAG} ."
+                    echo '✅ Docker image built successfully!'
+                }
+            }
+        }
+
+        stage('Security Scan (Trivy)') {
+            steps {
+                dir('weather-app'){
+                    echo 'Scanning the weather app Docker image for critical vulnerabilities...'
+                    sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL --exit-code 1 ${IMAGE_TAG}"
+                    echo '✅ Scan completed. No CRITICAL issues detected!'
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                echo 'Pushing the weather app image to Docker Hub...'
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials-trgqn', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                    sh '''
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ''' + "${IMAGE_TAG}" + '''
+                    '''
+                }
+                echo '✅ Image successfully pushed to Docker Hub Registry!'
+            }
+        }
+
+        stage('Deploy to K3s') {
+            steps {
+                dir('weather-app'){
+                    echo 'Deploying weather app to K3s environment...'
+                    sh '''
+                    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+                    
+                    kubectl apply -f k8s/deployment.yaml
+                    
+                    kubectl rollout restart deployment/meteo-hist-deployment -n default
+                    '''
+                    echo '✅ Deployment successful!'
+                }
+            }
+        }
+    }
+}
