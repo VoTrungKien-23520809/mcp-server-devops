@@ -25,6 +25,9 @@ JENKINS_URL = os.getenv("JENKINS_URL")
 JENKINS_USER = os.getenv("JENKINS_USER")
 JENKINS_TOKEN = os.getenv("JENKINS_TOKEN")
 
+AZURE_IP = os.getenv("AZURE_IP")
+SSH_KEY_PATH = os.getenv("SSH_KEY_PATH")
+
 # 4. Trái tim bất tử: Cấu hình Session với cơ chế Retry (Chống sập mạng)
 session = requests.Session()
 retry_strategy = Retry(
@@ -121,12 +124,20 @@ def read_code_context(file_path: str) -> str:
 # Tool 5: Soi Cluster
 @mcp.tool()
 def get_k8s_nodes() -> str:
-    """Retrieve the current status of the nodes in the K3s cluster."""
     try:
-        result = subprocess.run(["kubectl", "get", "nodes", "-o", "wide"], capture_output=True, text=True, check=True, timeout=KUBECTL_TIMEOUT)
+        azure_ip = AZURE_IP
+        ssh_key_path = SSH_KEY_PATH
+        
+        result = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", "-i", ssh_key_path, f"azureuser@{azure_ip}", "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && sudo kubectl get nodes -o wide"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15
+        )
         return f"Dữ liệu từ Cluster:\n{result.stdout.strip()}"
     except Exception as e:
-        return f"Lỗi khi gọi kubectl: {str(e)}"
+        return f"Lỗi kết nối SSH tới Cluster: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()

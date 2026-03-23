@@ -4,10 +4,37 @@ import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from langchain_ollama import OllamaLLM
+import requests
+from dotenv import load_dotenv
 
-# 1. Giữ nguyên cấu hình Model của ông (Xịn nhất rồi)
+load_dotenv()
+
+# 1. cấu hình Model 
 Model_name = "qwen2.5:14b"
 llm = OllamaLLM(model=Model_name)
+
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+
+def send_discord_alert(message):
+    """Hàm bắn báo cáo sang Discord qua Webhook"""
+    if not DISCORD_WEBHOOK_URL:
+        print("⚠️ Chưa cấu hình Discord Webhook URL!")
+        return
+
+    payload = {
+        "content": message,
+        "username": "AI SRE Agent (Qwen 14B)", # Tên bot hiển thị
+        "avatar_url": "https://cdn-icons-png.flaticon.com/512/4712/4712139.png" 
+    }
+
+    try:
+        res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        if res.status_code == 204: # Discord Webhook trả về 204 là thành công
+            print("🚀 Đã bắn báo cáo sang Discord thành công!")
+        else:
+            print(f"⚠️ Lỗi gửi Discord ({res.status_code}): {res.text}")
+    except Exception as e:
+        print(f"⚠️ Không thể kết nối tới Discord: {e}")
 
 async def run_agent():
     print(f"⏳ Đang khởi động AI Agent ({Model_name}) và kết nối MCP Server...")
@@ -65,6 +92,9 @@ async def run_agent():
                 print("="*40)
                 print(response)
                 print("="*40)
+
+                alert_msg = f"🚨 **CẢNH BÁO TỪ AI SRE** 🚨\n\n{response}"
+                send_discord_alert(alert_msg)
 
     except Exception as e:
         print(f"❌ Lỗi nghiêm trọng: {e}")
