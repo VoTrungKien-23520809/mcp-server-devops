@@ -1,0 +1,41 @@
+@import url("https://fonts.googleapis.com/css2?family=Lato:wght@200&display=swap");
+
+html {
+  font-family: "Lato, Arial, sans-serif";
+  font-size: 1.2rem;
+}
+
+/* Widget labels */
+.css-16idsys p,
+.e1y5xkzn3 p,
+.e1nzilvr4 p,
+.e121c1cl0 p {
+  font-size: 1.1rem;
+}
+
+/* Margin below widget labels */
+.css-81oif8,
+.e1jram340 {
+  margin-bottom: 0.1rem;
+}
+
+/* Main container */
+.css-z5fcl4 {
+  padding-top: 1.5rem;
+}
+
+div.css-j5r0tf {
+  min-width: 285px;
+}
+
+/* Make Folium map responsive */
+[title~="st.iframe"] {
+  min-height: 500px;
+  width: 100%;
+}
+
+/* Remove blank space at top and bottom */
+.block-container {
+  padding-top: 0rem;
+  padding-bottom: 0rem;
+}
