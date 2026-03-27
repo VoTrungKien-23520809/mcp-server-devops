@@ -23,13 +23,13 @@ def send_discord_alert(message):
 
     payload = {
         "content": message,
-        "username": "AI SRE Agent (Qwen 14B)", 
+        "username": "AI SRE Agent (Qwen 14B)", # Tên bot hiển thị
         "avatar_url": "https://cdn-icons-png.flaticon.com/512/4712/4712139.png" 
     }
 
     try:
         res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        if res.status_code == 204: 
+        if res.status_code == 204: # Discord Webhook trả về 204 là thành công
             print("🚀 Đã bắn báo cáo sang Discord thành công!")
         else:
             print(f"⚠️ Lỗi gửi Discord ({res.status_code}): {res.text}")
@@ -106,7 +106,7 @@ async def run_agent():
                 print(response)
                 print("="*40)
 
-                alert_msg = f"🚨 **CẢNH BÁO TỪ AI SRE KIÊN VÕ** 🚨\n\n{response}"
+                alert_msg = f"🚨 **CẢNH BÁO TỪ AI SRE** 🚨\n\n{response}"
                 send_discord_alert(alert_msg)
 
     except Exception as e:
