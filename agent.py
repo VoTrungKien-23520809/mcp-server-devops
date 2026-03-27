@@ -39,7 +39,6 @@ def send_discord_alert(message):
 async def run_agent():
     print(f"⏳ Đang khởi động AI Agent ({Model_name}) và kết nối MCP Server...")
 
-    # Cấu hình kết nối tới file main.py
     server_params = StdioServerParameters(
         command="python",
         args=["main.py"],
@@ -66,7 +65,13 @@ async def run_agent():
                 log_output = jenkins_result.content[0].text
                 print("✅ Đã lấy được log Jenkins!")
 
-                # --- BƯỚC 3: AI TỔNG HỢP VÀ PHÂN TÍCH ---
+                # --- BƯỚC 3: ĐO NHỊP TIM HỆ THỐNG (PROMETHEUS) ---
+                print("📊 AI đang lấy chỉ số CPU/RAM từ Prometheus...")
+                metrics_result = await session.call_tool("fetch_metrics", arguments={})
+                metrics_data = metrics_result.content[0].text
+                print(f"✅ Đã lấy được Metrics: \n{metrics_data}")
+
+                # --- BƯỚC 4: AI TỔNG HỢP VÀ PHÂN TÍCH ---
                 print(f"\n🧠 {Model_name} đang phân tích toàn diện hệ thống (Vui lòng đợi GPU)...")
                 
                 prompt = f"""
@@ -79,10 +84,18 @@ async def run_agent():
                 [JENKINS BUILD LOG]:
                 {log_output}
 
+                [CHỈ SỐ HIỆU NĂNG (METRICS)]:
+                {metrics_data}
+
                 Hãy lập một báo cáo chẩn đoán NGẮN GỌN bằng TIẾNG VIỆT theo cấu trúc:
                 1. Tình trạng Cluster: (Các node có Ready không?)
                 2. Tình trạng Pipeline: (Thành công hay Thất bại? Nếu lỗi thì lỗi ở Stage nào?)
-                3. Hành động đề xuất: (Cần sửa gì để hệ thống hoàn hảo hơn?)
+                3. Đánh giá Hiệu năng: (CPU và RAM hiện tại có ở mức an toàn không? Có rủi ro gì không?)
+                4. Hành động đề xuất: (Cần tối ưu gì để hệ thống chạy mượt hơn?)
+                5. Giải pháp & Lệnh thực thi: 
+                   - Đưa ra giải pháp xử lý (nếu có vấn đề).
+                   - NẾU CPU > 60% hoặc hệ thống có dấu hiệu quá tải, BẮT BUỘC cung cấp sẵn câu lệnh `kubectl scale deployment <tên-app> -n <namespace> --replicas=3` để người quản trị copy/paste xử lý ngay. 
+                   - Đặt câu lệnh trong block code bash.
                 """
 
                 response = llm.invoke(prompt)
