@@ -139,5 +139,37 @@ def get_k8s_nodes() -> str:
     except Exception as e:
         return f"Lỗi kết nối SSH tới Cluster: {str(e)}"
 
+# Tool 6: Công cụ lấy metrics từ Prometheus (Buff thêm sức mạnh để lấy dữ liệu chính xác và nhanh hơn)
+@mcp.tool()
+def fetch_metrics() -> str:
+    """Fetch real-time CPU and Memory usage from Prometheus."""
+    logger.info("Đang lấy chỉ số CPU và RAM từ Prometheus...")
+    
+    # Sử dụng IP máy ảo Azure của ông
+    prometheus_url = f"http://{AZURE_IP}:30003/api/v1/query"
+    
+    # Câu lệnh PromQL lấy % CPU và RAM của toàn Cụm
+    cpu_query = '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
+    ram_query = '100 * (1 - ((avg_over_time(node_memory_MemFree_bytes[5m]) + avg_over_time(node_memory_Cached_bytes[5m]) + avg_over_time(node_memory_Buffers_bytes[5m])) / avg_over_time(node_memory_MemTotal_bytes[5m])))'
+
+    try:
+        # Lấy CPU
+        res_cpu = requests.get(prometheus_url, params={'query': cpu_query}, timeout=10)
+        cpu_data = res_cpu.json()['data']['result']
+        cpu_usage = float(cpu_data[0]['value'][1]) if cpu_data else 0
+
+        # Lấy RAM
+        res_ram = requests.get(prometheus_url, params={'query': ram_query}, timeout=10)
+        ram_data = res_ram.json()['data']['result']
+        ram_usage = float(ram_data[0]['value'][1]) if ram_data else 0
+
+        metric_report = f"🔥 Chỉ số hệ thống hiện tại:\n- CPU Usage: {cpu_usage:.2f}%\n- Memory Usage: {ram_usage:.2f}%"
+        logger.info(f"✅ Lấy metrics thành công: CPU {cpu_usage:.2f}%, RAM {ram_usage:.2f}%")
+        return metric_report
+
+    except Exception as e:
+        logger.error(f"Lỗi khi lấy dữ liệu Prometheus: {str(e)}")
+        return f"Không thể lấy chỉ số từ Prometheus: {str(e)}"
+
 if __name__ == "__main__":
     mcp.run()
