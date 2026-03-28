@@ -2,6 +2,7 @@ import os
 import logging
 import subprocess
 import requests
+import time
 from mcp.server.fastmcp import FastMCP
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -170,6 +171,51 @@ def fetch_metrics() -> str:
     except Exception as e:
         logger.error(f"Lỗi khi lấy dữ liệu Prometheus: {str(e)}")
         return f"Không thể lấy chỉ số từ Prometheus: {str(e)}"
+
+# Tool 7: AI tự động kích hoạt Jenkins và đợi lấy thành quả
+@mcp.tool()
+def trigger_jenkins_and_wait(job_name: str) -> str:
+    """Kích hoạt Jenkins build, đợi chạy xong và trả về Log của bản build ĐÓ."""
+    logger.info(f"🚀 AI ĐANG HÀNH ĐỘNG: Yêu cầu kích hoạt Jenkins Job: {job_name}")
+    
+    if not JENKINS_URL or not JENKINS_USER or not JENKINS_TOKEN:
+        return "Error: Thiếu cấu hình Jenkins trong .env"
+
+    base_url = JENKINS_URL.rstrip('/')
+    build_url = f"{base_url}/job/{job_name}/build"
+    
+    try:
+        # 1. Bấm nút Build từ xa
+        res = session.post(build_url, auth=(JENKINS_USER, JENKINS_TOKEN), timeout=10)
+        res.raise_for_status()
+        logger.info("✅ Kích hoạt Build thành công! AI đang đợi Jenkins chạy...")
+        
+        # Đợi 10 giây để Jenkins kịp đưa Job vào queue và bắt đầu
+        time.sleep(10) 
+        
+        # 2. Theo dõi tiến độ của bản Build mới nhất
+        info_url = f"{base_url}/job/{job_name}/lastBuild/api/json"
+        
+        while True:
+            info_res = session.get(info_url, auth=(JENKINS_USER, JENKINS_TOKEN), timeout=10)
+            info_data = info_res.json()
+            is_building = info_data.get('building', False)
+            
+            if not is_building:
+                result_status = info_data.get('result', 'UNKNOWN')
+                logger.info(f"🎯 Jenkins đã chạy xong với trạng thái: {result_status}")
+                break
+                
+            logger.info("⏳ Jenkins vẫn đang chạy... AI tiếp tục đợi thêm 10 giây...")
+            time.sleep(10) # Cứ 10 giây hỏi thăm Jenkins 1 lần
+            
+        # 3. Chạy xong rồi, gọi lại hàm kéo log để lấy kết quả nóng hổi
+        log_content = get_jenkins_logs(job_name, "lastBuild")
+        return f"Trạng thái Build: {result_status}\n\n=== LOG CHI TIẾT ===\n{log_content}"
+        
+    except Exception as e:
+        logger.error(f"❌ Lỗi khi điều khiển Jenkins: {str(e)}")
+        return f"Lỗi không thể chạy Jenkins: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()

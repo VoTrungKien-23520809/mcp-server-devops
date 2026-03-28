@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 1. cấu hình Model 
+# 1. Cấu hình Model 
 Model_name = "qwen2.5:14b"
 llm = OllamaLLM(model=Model_name)
 
@@ -23,13 +23,13 @@ def send_discord_alert(message):
 
     payload = {
         "content": message,
-        "username": "AI SRE Agent (Qwen 14B)", # Tên bot hiển thị
+        "username": "AI SRE Agent (Qwen 14B)", 
         "avatar_url": "https://cdn-icons-png.flaticon.com/512/4712/4712139.png" 
     }
 
     try:
         res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        if res.status_code == 204: # Discord Webhook trả về 204 là thành công
+        if res.status_code == 204: 
             print("🚀 Đã bắn báo cáo sang Discord thành công!")
         else:
             print(f"⚠️ Lỗi gửi Discord ({res.status_code}): {res.text}")
@@ -56,14 +56,14 @@ async def run_agent():
                 k8s_data = k8s_result.content[0].text
                 print("✅ Đã lấy được dữ liệu Cluster!")
 
-                # --- BƯỚC 2: SOI LOG JENKINS ---
-                print("🤖 AI đang kéo log Jenkins mới nhất...")
+                # --- BƯỚC 2: AI TỰ KÍCH HOẠT JENKINS VÀ NGỒI ĐỢI ---
+                print("🤖 AI đang ra lệnh cho Jenkins chạy bản Build mới nhất và đợi...")
                 jenkins_result = await session.call_tool(
-                    "get_jenkins_logs",
-                    arguments={"job_name": "mcp-server-pipeline", "build_number": "lastBuild"}
+                    "trigger_jenkins_and_wait",
+                    arguments={"job_name": "mcp-server-pipeline"}
                 )
                 log_output = jenkins_result.content[0].text
-                print("✅ Đã lấy được log Jenkins!")
+                print("✅ Jenkins đã chạy xong! AI đã lấy được log mới nhất!")
 
                 # --- BƯỚC 3: ĐO NHỊP TIM HỆ THỐNG (PROMETHEUS) ---
                 print("📊 AI đang lấy chỉ số CPU/RAM từ Prometheus...")
@@ -89,10 +89,9 @@ async def run_agent():
 
                 Hãy lập một báo cáo chẩn đoán NGẮN GỌN bằng TIẾNG VIỆT theo cấu trúc:
                 1. Tình trạng Cluster: (Các node có Ready không?)
-                2. Tình trạng Pipeline: (Thành công hay Thất bại? Nếu lỗi thì lỗi ở Stage nào?)
-                3. Đánh giá Hiệu năng: (CPU và RAM hiện tại có ở mức an toàn không? Có rủi ro gì không?)
-                4. Hành động đề xuất: (Cần tối ưu gì để hệ thống chạy mượt hơn?)
-                5. Giải pháp & Lệnh thực thi: 
+                2. Tình trạng Pipeline: (Thành công hay Thất bại?)
+                3. Đánh giá Hiệu năng: (Phân tích mức độ sử dụng CPU và RAM)
+                4. Giải pháp & Lệnh thực thi: 
                    - Đưa ra giải pháp xử lý (nếu có vấn đề).
                    - NẾU CPU > 60% hoặc hệ thống có dấu hiệu quá tải, BẮT BUỘC cung cấp sẵn câu lệnh `kubectl scale deployment <tên-app> -n <namespace> --replicas=3` để người quản trị copy/paste xử lý ngay. 
                    - Đặt câu lệnh trong block code bash.
