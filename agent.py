@@ -89,9 +89,10 @@ async def run_agent():
 
                 Hãy lập một báo cáo chẩn đoán NGẮN GỌN bằng TIẾNG VIỆT theo cấu trúc:
                 1. Tình trạng Cluster: (Các node có Ready không?)
-                2. Tình trạng Pipeline: (Thành công hay Thất bại?)
-                3. Đánh giá Hiệu năng: (Phân tích mức độ sử dụng CPU và RAM)
-                4. Giải pháp & Lệnh thực thi: 
+                2. Tình trạng Pipeline: (Thành công hay Thất bại? Nếu lỗi thì lỗi ở Stage nào?)
+                3. Đánh giá Hiệu năng: (CPU và RAM hiện tại có ở mức an toàn không? Có rủi ro gì không?)
+                4. Hành động đề xuất: (Cần tối ưu gì để hệ thống chạy mượt hơn?)
+                5. Giải pháp & Lệnh thực thi: 
                    - Đưa ra giải pháp xử lý (nếu có vấn đề).
                    - NẾU CPU > 60% hoặc hệ thống có dấu hiệu quá tải, BẮT BUỘC cung cấp sẵn câu lệnh `kubectl scale deployment <tên-app> -n <namespace> --replicas=3` để người quản trị copy/paste xử lý ngay. 
                    - Đặt câu lệnh trong block code bash.
