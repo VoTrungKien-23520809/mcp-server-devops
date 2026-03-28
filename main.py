@@ -217,5 +217,36 @@ def trigger_jenkins_and_wait(job_name: str) -> str:
         logger.error(f"❌ Lỗi khi điều khiển Jenkins: {str(e)}")
         return f"Lỗi không thể chạy Jenkins: {str(e)}"
 
+# Tool 8: Đọc Log Ứng Dụng 
+@mcp.tool()
+def get_app_logs(namespace: str = "default", label_selector: str = "app=weather-app") -> str:
+    """Fetch the last 50 lines of logs from a specific application pod in Kubernetes."""
+    logger.info(f"🔍 Đang kéo log của ứng dụng có nhãn {label_selector} trong namespace '{namespace}'...")
+    try:
+        azure_ip = AZURE_IP
+        ssh_key_path = SSH_KEY_PATH
+        
+        # Dùng lệnh kubectl logs với cờ -l để gom log của tất cả các pod thuộc app đó
+        cmd = f"export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && sudo kubectl logs -l {label_selector} -n {namespace} --tail=50"
+        
+        result = subprocess.run(
+            ["ssh", "-o", "StrictHostKeyChecking=no", "-i", ssh_key_path, f"azureuser@{azure_ip}", cmd],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15
+        )
+        logs = result.stdout.strip()
+        
+        if not logs:
+            return "Không có log nào được sinh ra hoặc không tìm thấy pod nào khớp với nhãn này."
+            
+        logger.info("✅ Đã lấy được log ứng dụng thành công!")
+        return logs
+        
+    except Exception as e:
+        logger.error(f"❌ Lỗi khi lấy log ứng dụng: {str(e)}")
+        return f"Lỗi không thể lấy log ứng dụng: {str(e)}"
+
 if __name__ == "__main__":
     mcp.run()
