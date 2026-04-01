@@ -1,6 +1,7 @@
 import os
 import logging
 import subprocess
+import re
 import requests
 import time
 from mcp.server.fastmcp import FastMCP
@@ -28,6 +29,7 @@ JENKINS_TOKEN = os.getenv("JENKINS_TOKEN")
 
 AZURE_IP = os.getenv("AZURE_IP")
 SSH_KEY_PATH = os.getenv("SSH_KEY_PATH")
+SSH_KNOWN_HOSTS_PATH = os.path.expanduser(os.getenv("SSH_KNOWN_HOSTS_PATH", "~/.ssh/known_hosts"))
 
 # 4. Trái tim bất tử: Cấu hình Session với cơ chế Retry (Chống sập mạng)
 session = requests.Session()
@@ -40,6 +42,38 @@ retry_strategy = Retry(
 adapter = HTTPAdapter(max_retries=retry_strategy)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
+
+K8S_NAMESPACE_RE = re.compile(r"^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$")
+K8S_LABEL_SELECTOR_RE = re.compile(r"^[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+$")
+
+
+def _run_ssh_kubectl(kubectl_args: list[str], timeout: int = 15) -> subprocess.CompletedProcess:
+    if not AZURE_IP or not SSH_KEY_PATH:
+        raise ValueError("Missing AZURE_IP or SSH_KEY_PATH in environment.")
+
+    ssh_cmd = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        f"UserKnownHostsFile={SSH_KNOWN_HOSTS_PATH}",
+        "-i",
+        SSH_KEY_PATH,
+        f"azureuser@{AZURE_IP}",
+        "sudo",
+        f"KUBECONFIG=/etc/rancher/k3s/k3s.yaml",
+        "kubectl",
+    ] + kubectl_args
+
+    return subprocess.run(
+        ssh_cmd,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=timeout,
+    )
 
 # Tool 1: Test Server
 @mcp.tool()
@@ -126,16 +160,7 @@ def read_code_context(file_path: str) -> str:
 @mcp.tool()
 def get_k8s_nodes() -> str:
     try:
-        azure_ip = AZURE_IP
-        ssh_key_path = SSH_KEY_PATH
-        
-        result = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no", "-i", ssh_key_path, f"azureuser@{azure_ip}", "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && sudo kubectl get nodes -o wide"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15
-        )
+        result = _run_ssh_kubectl(["get", "nodes", "-o", "wide"], timeout=15)
         return f"Dữ liệu từ Cluster:\n{result.stdout.strip()}"
     except Exception as e:
         return f"Lỗi kết nối SSH tới Cluster: {str(e)}"
@@ -223,18 +248,14 @@ def get_app_logs(namespace: str = "default", label_selector: str = "app=weather-
     """Fetch the last 50 lines of logs from a specific application pod in Kubernetes."""
     logger.info(f"🔍 Đang kéo log của ứng dụng có nhãn {label_selector} trong namespace '{namespace}'...")
     try:
-        azure_ip = AZURE_IP
-        ssh_key_path = SSH_KEY_PATH
-        
-        # Dùng lệnh kubectl logs với cờ -l để gom log của tất cả các pod thuộc app đó
-        cmd = f"export KUBECONFIG=/etc/rancher/k3s/k3s.yaml && sudo kubectl logs -l {label_selector} -n {namespace} --tail=50"
-        
-        result = subprocess.run(
-            ["ssh", "-o", "StrictHostKeyChecking=no", "-i", ssh_key_path, f"azureuser@{azure_ip}", cmd],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15
+        if not K8S_NAMESPACE_RE.fullmatch(namespace):
+            return "Invalid namespace format."
+        if not K8S_LABEL_SELECTOR_RE.fullmatch(label_selector):
+            return "Invalid label selector format. Use key=value."
+
+        result = _run_ssh_kubectl(
+            ["logs", "-l", label_selector, "-n", namespace, "--tail=50"],
+            timeout=15,
         )
         logs = result.stdout.strip()
         
