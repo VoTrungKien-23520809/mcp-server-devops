@@ -1,7 +1,7 @@
 ---
 - name: Setup Azure VM for DevOps Project
   hosts: azure_vm
-  become: yes # Chạy lệnh với quyền sudo
+  become: true # Chạy lệnh với quyền sudo
 
   tasks:
     - name: Update apt cache
@@ -53,4 +53,4 @@
     - name: Restrict k3s config permissions
       file:
         path: /etc/rancher/k3s/k3s.yaml
-        mode: '0644'
+        mode: '0600'
