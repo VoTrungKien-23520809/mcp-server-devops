@@ -65,4 +65,25 @@ pipeline {
             }
         }
     }
+    post {
+        always {
+            script {
+                echo "📣 Đang báo cáo kết quả cho AI Agent..."
+                // Sếp dán cái link npx localtunnel hồi nãy vào đây (nhớ thêm /webhook ở cuối)
+                def webhookUrl = "https://bitter-foxes-nail.loca.lt/webhook" 
+                
+                def payload = """
+                {
+                    "job_name": "${JOB_NAME}",
+                    "build_number": "${BUILD_NUMBER}",
+                    "status": "${currentBuild.currentResult}"
+                }
+                """
+                
+                sh """
+                curl -X POST -H "Content-Type: application/json" -d '${payload}' ${webhookUrl}
+                """
+            }
+        }
+    }
 }
