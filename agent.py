@@ -92,11 +92,18 @@ Final Answer:
 """
 
                 USER_TASK = """
-Nhiệm vụ điều tra bắt buộc phải làm THEO ĐÚNG THỨ TỰ:
-- Bước 1: Gọi trigger_jenkins_and_wait (job_name: 'weather-app-pipeline').
-- Bước 2: Đợi có kết quả Jenkins, gọi tiếp fetch_metrics.
-- Bước 3: Đợi có Metrics, BẮT BUỘC gọi get_app_logs (namespace 'default', app 'meteo-hist') ĐỂ ĐỌC LOG.
-- Bước 4: Sau khi đã đọc ĐỦ log, xuất Final Answer với báo cáo cực kỳ chi tiết theo đúng định dạng Markdown.
+Nhiệm vụ điều tra bắt buộc:
+1. Gọi trigger_jenkins_and_wait (job_name: 'weather-app-pipeline').
+2. Đợi có kết quả Jenkins, gọi tiếp fetch_metrics.
+3. BẮT BUỘC gọi get_app_logs (namespace 'default', app 'meteo-hist').
+
+RẼ NHÁNH ĐIỀU TRA (TƯ DUY ĐỘNG - KHÔNG ĐOÁN MÒ):
+- Nếu Jenkins báo SUCCESS: Xuất Final Answer tổng hợp tình hình.
+- Nếu Jenkins báo FAILURE: Đọc kỹ log Jenkins để tìm manh mối. Dựa vào manh mối, tự suy luận xem cần dùng `list_directory` và `read_project_file` để đọc file nào (VD: Dockerfile, requirements.txt, .py). 
+Chỉ khi TỰ MÌNH tìm thấy dòng code sai sót thì mới được xuất Final Answer.
+
+⚠️ LƯU Ý SỐNG CÒN VỀ ĐƯỜNG DẪN (PATH):
+Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo (./). TUYỆT ĐỐI KHÔNG sử dụng đường dẫn tuyệt đối lấy từ log Jenkins (như /var/lib/jenkins/...). Bạn CHỈ ĐƯỢC phép dùng đường dẫn tương đối để tìm file (Ví dụ: 'weather-app/Dockerfile', 'weather-app/requirements.txt').
 """
 
                 print("\n🧠 Đã tải Hệ điều hành Thám Tử (ReAct) cho Qwen 2.5...")
