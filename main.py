@@ -269,5 +269,42 @@ def get_app_logs(namespace: str = "default", label_selector: str = "app=weather-
         logger.error(f"❌ Lỗi khi lấy log ứng dụng: {str(e)}")
         return f"Lỗi không thể lấy log ứng dụng: {str(e)}"
 
+import os
+
+# Tool 9: AI xem trong thư mục có những file gì (như lệnh 'ls')
+@mcp.tool()
+def list_directory(directory_path: str = ".") -> str:
+    """List all files and folders in a given directory within the project."""
+    logger.info(f"📂 AI đang quét thư mục: {directory_path}")
+    try:
+        safe_path = os.path.abspath(directory_path)
+        # Khóa an toàn: Chỉ cho phép quét trong thư mục dự án
+        if not safe_path.startswith(os.getcwd()):
+            return "❌ Lỗi bảo mật: Không được phép truy cập ngoài thư mục dự án."
+            
+        items = os.listdir(safe_path)
+        return f"--- Danh sách file trong '{directory_path}' ---\n" + "\n".join(items)
+    except Exception as e:
+        return f"❌ Không thể đọc thư mục {directory_path}: {str(e)}"
+
+# Tool 10: AI dùng cái này để đọc nội dung file code/config (như lệnh 'cat')
+@mcp.tool()
+def read_project_file(file_path: str) -> str:
+    """Read the content of a file (e.g., Dockerfile, Jenkinsfile, .py) to analyze code or configuration."""
+    logger.info(f"📖 AI đang đọc file: {file_path}")
+    try:
+        safe_path = os.path.abspath(file_path)
+        # Khóa an toàn: Chỉ cho phép đọc trong thư mục dự án
+        if not safe_path.startswith(os.getcwd()):
+            return "❌ Lỗi bảo mật: Không được phép đọc file ngoài thư mục dự án."
+
+        with open(safe_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return f"--- NỘI DUNG FILE '{file_path}' ---\n{content}"
+    except FileNotFoundError:
+        return f"❌ Lỗi: Không tìm thấy file '{file_path}'"
+    except Exception as e:
+        return f"❌ Lỗi khi đọc file {file_path}: {str(e)}"
+
 if __name__ == "__main__":
     mcp.run()
