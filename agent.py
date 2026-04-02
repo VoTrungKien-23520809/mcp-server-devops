@@ -3,19 +3,24 @@ import os
 import sys
 import json
 import re
+import requests
+import uvicorn
+from fastapi import FastAPI, BackgroundTasks, Request
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from langchain_ollama import OllamaLLM
-import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 1. Cấu hình Model 
+# ==========================================
+# CẤU HÌNH HỆ THỐNG
+# ==========================================
 Model_name = "qwen2.5:14b"
 llm = OllamaLLM(model=Model_name)
-
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+
+app = FastAPI()
 
 def send_discord_alert(message):
     """Hàm bắn báo cáo sang Discord qua Webhook có cơ chế chia nhỏ tin nhắn"""
@@ -23,7 +28,7 @@ def send_discord_alert(message):
         print("⚠️ Chưa cấu hình Discord Webhook URL!")
         return
 
-    # Discord giới hạn 2000 ký tự. Ta cắt nhỏ tin nhắn thành các đoạn 1900 ký tự cho an toàn.
+    # Discord giới hạn 2000 ký tự. Cắt nhỏ tin nhắn thành các đoạn 1900 ký tự.
     max_length = 1900
     chunks = [message[i:i+max_length] for i in range(0, len(message), max_length)]
 
@@ -33,7 +38,6 @@ def send_discord_alert(message):
             "username": "AI SRE Agent (Qwen 14B)", 
             "avatar_url": "https://cdn-icons-png.flaticon.com/512/4712/4712139.png" 
         }
-
         try:
             res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
             if res.status_code == 204: 
@@ -43,8 +47,11 @@ def send_discord_alert(message):
         except Exception as e:
             print(f"⚠️ Không thể kết nối tới Discord: {e}")
 
-async def run_agent():
-    print(f"⏳ Đang khởi động AI Agent ({Model_name}) và kết nối MCP Server...")
+# ==========================================
+# BỘ NÃO THÁM TỬ (REACT LOOP)
+# ==========================================
+async def run_investigation(job_name: str):
+    print(f"\n🕵️ AI THÁM TỬ ĐÃ THỨC DẬY! Bắt đầu điều tra sự cố cho Job: {job_name}")
 
     server_params = StdioServerParameters(
         command="python",
@@ -91,9 +98,9 @@ Final Answer:
 - (Đưa ra lời khuyên cụ thể, kèm theo đoạn code hoặc câu lệnh bash/kubectl cần thiết).
 """
 
-                USER_TASK = """
+                USER_TASK = f"""
 Nhiệm vụ điều tra bắt buộc:
-1. Gọi trigger_jenkins_and_wait (job_name: 'weather-app-pipeline').
+1. Gọi trigger_jenkins_and_wait (job_name: '{job_name}').
 2. Đợi có kết quả Jenkins, gọi tiếp fetch_metrics.
 3. BẮT BUỘC gọi get_app_logs (namespace 'default', app 'meteo-hist').
 
@@ -107,22 +114,17 @@ Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo 
 """
 
                 print("\n🧠 Đã tải Hệ điều hành Thám Tử (ReAct) cho Qwen 2.5...")
-                print("🚀 Bắt đầu giao việc cho AI...")
+                print(f"🚀 Bắt đầu giao việc cho AI điều tra lỗi của {job_name}...")
 
                 history = ""
-                max_steps = 10 # Cho phép AI điều tra tối đa 10 vòng lặp
+                max_steps = 10 
                 
                 for step in range(max_steps):
                     print(f"\n--- [Vòng lặp điều tra thứ {step + 1}/{max_steps}] ---")
-                    
                     prompt = f"{SYSTEM_PROMPT}\n\nLịch sử điều tra:\n{history}\n\nNhiệm vụ của bạn: {USER_TASK}\n\nBước tiếp theo của bạn là gì?"
-                    
                     response = llm.invoke(prompt)
-                    
-                    # In suy nghĩ của AI ra màn hình cho sếp xem quá trình nó "động não"
                     print(f"🤖 AI Suy nghĩ & Quyết định:\n{response}\n")
                     
-                    # 1. Nếu AI đã tìm ra kết quả cuối cùng
                     if "Final Answer:" in response:
                         final_report = response.split("Final Answer:")[1].strip()
                         print("\n" + "="*40)
@@ -135,15 +137,12 @@ Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo 
                         send_discord_alert(alert_msg)
                         break
                         
-                    # 2. Nếu AI muốn gọi Tool, tiến hành trích xuất Action và JSON
                     action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
                     input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
                     
                     if action_match and input_match:
                         tool_name = action_match.group(1).strip()
                         raw_json = input_match.group(1).strip()
-                        
-                        # Làm sạch JSON nếu AI lỡ chèn ký tự markdown (```json ... ```)
                         raw_json = re.sub(r'```json\s*', '', raw_json)
                         raw_json = re.sub(r'```', '', raw_json)
                         
@@ -151,17 +150,13 @@ Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo 
                             tool_args = json.loads(raw_json)
                             print(f"🛠️ MCP Server đang thực thi Tool: [{tool_name}] với tham số {tool_args}")
                             
-                            # Kích hoạt MCP Tool
                             tool_result = await session.call_tool(tool_name, arguments=tool_args)
                             observation = tool_result.content[0].text
                             
-                            # Cắt bớt kết quả nếu quá dài để tránh nổ não LLM (tràn Context Window)
                             if len(observation) > 4000:
                                 observation = observation[:4000] + "\n...[ĐÃ CẮT BỚT VÌ LOG QUÁ DÀI]..."
                                 
                             print(f"✅ Đã có bằng chứng! (Observation: {len(observation)} ký tự). Trả về cho AI phân tích...")
-                            
-                            # Lưu vào hồ sơ vụ án (History)
                             history += f"\nThought: {response}\nObservation: {observation}\n"
                             
                         except json.JSONDecodeError:
@@ -179,7 +174,25 @@ Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo 
 
     except Exception as e:
         print(f"❌ Lỗi nghiêm trọng: {e}")
-        sys.exit(1)
+
+# ==========================================
+# CỔNG NHẬN TÍN HIỆU TỪ JENKINS (WEBHOOK)
+# ==========================================
+@app.post("/webhook")
+async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
+    data = await request.json()
+    job_name = data.get("job_name", "weather-app-pipeline")
+    status = data.get("status")
+
+    print(f"\n📥 [WEBHOOK] Nhận tín hiệu từ Jenkins: Job '{job_name}' - Trạng thái: {status}")
+
+    if status == "FAILURE":
+        print("🚨 Phát hiện lỗi! Đang đánh thức AI chạy ngầm...")
+        background_tasks.add_task(run_investigation, job_name)
+        return {"message": "AI Agent đã tiếp nhận yêu cầu và đang tiến hành điều tra!"}
+    
+    return {"message": "Hệ thống xanh, AI tiếp tục ngủ ngon."}
 
 if __name__ == "__main__":
-    asyncio.run(run_agent())
+    print("🚀 AIOps Server đang lắng nghe trên cổng 5000...")
+    uvicorn.run(app, host="0.0.0.0", port=5000)
