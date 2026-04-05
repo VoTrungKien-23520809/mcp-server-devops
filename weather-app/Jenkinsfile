@@ -69,8 +69,8 @@ pipeline {
         always {
             script {
                 echo "📣 Đang báo cáo kết quả cho AI Agent..."
-                // Sếp dán cái link npx localtunnel hồi nãy vào đây (nhớ thêm /webhook ở cuối)
-                def webhookUrl = "https://bitter-foxes-nail.loca.lt/webhook" 
+                // Dán link MỚI vào đây
+                def webhookUrl = "https://lemon-houses-jog.loca.lt/webhook" 
                 
                 def payload = """
                 {
@@ -80,8 +80,9 @@ pipeline {
                 }
                 """
                 
+                // THÊM HEADER BYPASS VÀO ĐÂY
                 sh """
-                curl -X POST -H "Content-Type: application/json" -d '${payload}' ${webhookUrl}
+                curl -X POST -H "Content-Type: application/json" -H "Bypass-Tunnel-Reminder: true" -d '${payload}' ${webhookUrl}
                 """
             }
         }
