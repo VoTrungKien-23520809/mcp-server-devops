@@ -178,8 +178,20 @@ Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo 
 # ==========================================
 # CỔNG NHẬN TÍN HIỆU TỪ JENKINS (WEBHOOK)
 # ==========================================
+is_investigating = False  # Cờ đánh dấu AI đang bận
+
+async def run_investigation_wrapper(job_name):
+    """Hàm bọc để nhả cờ khóa sau khi AI điều tra xong"""
+    global is_investigating
+    try:
+        await run_investigation(job_name)
+    finally:
+        is_investigating = False
+        print("✅ AI đã điều tra xong. Mở khóa Webhook cho các lần sau.")
+
 @app.post("/webhook")
 async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
+    global is_investigating
     data = await request.json()
     job_name = data.get("job_name", "weather-app-pipeline")
     status = data.get("status")
@@ -187,8 +199,13 @@ async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
     print(f"\n📥 [WEBHOOK] Nhận tín hiệu từ Jenkins: Job '{job_name}' - Trạng thái: {status}")
 
     if status == "FAILURE":
-        print("🚨 Phát hiện lỗi! Đang đánh thức AI chạy ngầm...")
-        background_tasks.add_task(run_investigation, job_name)
+        if is_investigating:
+            print("🛑 AI đang bận điều tra một vụ án rồi, bỏ qua Webhook bị spam này!")
+            return {"message": "AI đang bận, bỏ qua."}
+            
+        print("🚨 Phát hiện lỗi! Đang khóa Webhook và đánh thức AI chạy ngầm...")
+        is_investigating = True
+        background_tasks.add_task(run_investigation_wrapper, job_name)
         return {"message": "AI Agent đã tiếp nhận yêu cầu và đang tiến hành điều tra!"}
     
     return {"message": "Hệ thống xanh, AI tiếp tục ngủ ngon."}
