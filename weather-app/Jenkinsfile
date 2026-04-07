@@ -70,7 +70,7 @@ pipeline {
             script {
                 echo "📣 Đang báo cáo kết quả cho AI Agent..."
                 // Dán link MỚI vào đây
-                def webhookUrl = "https://aiops-uit.loca.lt/webhook" 
+                def webhookUrl = "https://shy-vans-play.loca.lt/webhook" 
                 
                 def payload = """
                 {
