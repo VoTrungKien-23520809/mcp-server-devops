@@ -69,21 +69,29 @@ pipeline {
         always {
             script {
                 echo "📣 Đang báo cáo kết quả cho AI Agent..."
-                // Dán link MỚI vào đây
-                def webhookUrl = "https://shy-vans-play.loca.lt/webhook" 
                 
-                def payload = """
-                {
-                    "job_name": "${JOB_NAME}",
-                    "build_number": "${BUILD_NUMBER}",
-                    "status": "${currentBuild.currentResult}"
+                if (env.AI_AGENT_WEBHOOK) {
+                    // Tự động nối thêm đuôi /webhook vào URL gốc
+                    def webhookUrl = "${env.AI_AGENT_WEBHOOK}/webhook" 
+                    
+                    def payload = """
+                    {
+                        "job_name": "${JOB_NAME}",
+                        "build_number": "${BUILD_NUMBER}",
+                        "status": "${currentBuild.currentResult}"
+                    }
+                    """
+                    
+                    sh """
+                    curl -X POST \
+                    -H "Content-Type: application/json" \
+                    -H "Bypass-Tunnel-Reminder: true" \
+                    -d '${payload}' ${webhookUrl}
+                    """
+                    echo "✅ Đã gửi tín hiệu trạng thái (${currentBuild.currentResult}) tới AI Agent!"
+                } else {
+                    echo "⚠️ LƯU Ý: Không tìm thấy biến AI_AGENT_WEBHOOK trên Jenkins. Bỏ qua gọi AI."
                 }
-                """
-                
-                // THÊM HEADER BYPASS VÀO ĐÂY
-                sh """
-                curl -X POST -H "Content-Type: application/json" -H "Bypass-Tunnel-Reminder: true" -d '${payload}' ${webhookUrl}
-                """
             }
         }
     }

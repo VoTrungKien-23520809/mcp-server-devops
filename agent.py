@@ -70,7 +70,7 @@ QUY TẮC ĐIỀU TRA (REACT LOOP):
 2. ACTION: Bạn CHỈ ĐƯỢC GỌI 1 TOOL DUY NHẤT trong mỗi vòng lặp. Phải đợi có kết quả rồi mới gọi tool tiếp theo.
 
 Danh sách Tools:
-- trigger_jenkins_and_wait: {"job_name": "tên-job"}
+- get_jenkins_logs: {"job_name": "tên-job"}
 - get_app_logs: {"namespace": "tên-namespace", "label_selector": "app=tên-app"}
 - get_k8s_nodes: {}
 - fetch_metrics: {}
@@ -89,19 +89,19 @@ Thought: Tôi đã thu thập đủ dữ liệu thực tế và sẵn sàng báo
 Final Answer:
 [BẠN BẮT BUỘC PHẢI VIẾT BÁO CÁO SRE TOÀN DIỆN BẰNG TIẾNG VIỆT, SỬ DỤNG MARKDOWN CHUYÊN NGHIỆP VỚI CẤU TRÚC SAU:]
 #### 1. Tình trạng Hạ Tầng & CI/CD:
-- (Phân tích chi tiết kết quả Jenkins build SUCCESS/FAILURE).
+- (Phân tích chi tiết log lỗi từ Jenkins).
 #### 2. Đánh giá Hiệu năng:
 - (Nêu rõ % CPU, RAM và đánh giá mức độ tải).
 #### 3. Tình trạng Ứng Dụng:
-- (Trích xuất và phân tích CHUYÊN SÂU các cảnh báo, ví dụ như lỗi 'client.caching' hoặc Exception từ App Logs. Tuyệt đối không được nói chung chung nếu chưa đọc log).
+- (Trích xuất và phân tích CHUYÊN SÂU các cảnh báo hoặc Exception từ App Logs).
 #### 4. Giải pháp & Lệnh thực thi:
 - (Đưa ra lời khuyên cụ thể, kèm theo đoạn code hoặc câu lệnh bash/kubectl cần thiết).
 """
 
                 USER_TASK = f"""
 Nhiệm vụ điều tra bắt buộc:
-1. Gọi trigger_jenkins_and_wait (job_name: '{job_name}').
-2. Đợi có kết quả Jenkins, gọi tiếp fetch_metrics.
+1. Gọi get_jenkins_logs (job_name: '{job_name}') để ĐỌC LOG của bản build vừa thất bại. TUYỆT ĐỐI KHÔNG kích hoạt build mới.
+2. Đợi có kết quả log, gọi tiếp fetch_metrics.
 3. BẮT BUỘC gọi get_app_logs (namespace 'default', app 'meteo-hist').
 
 RẼ NHÁNH ĐIỀU TRA (TƯ DUY ĐỘNG - KHÔNG ĐOÁN MÒ):
