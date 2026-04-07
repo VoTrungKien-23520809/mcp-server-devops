@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    // 1. KHỐI PARAMETERS: Tạo form nhập link Tunnel trên giao diện Jenkins
+    parameters {
+        string(name: 'AI_AGENT_WEBHOOK', defaultValue: '', description: 'Nhập link Tunnel (Localtunnel/Ngrok) của bạn để nhận báo lỗi (Lưu ý: Bỏ đuôi /webhook). Để trống nếu không muốn gọi AI.')
+    }
+
     environment {
         DOCKER_HUB_USER = "trgqn" 
         APP_NAME = "meteo-hist" 
@@ -65,14 +70,17 @@ pipeline {
             }
         }
     }
+    
+    // 2. KHỐI POST: Đọc tham số từ UI và bắn Webhook
     post {
         always {
             script {
                 echo "📣 Đang báo cáo kết quả cho AI Agent..."
                 
-                if (env.AI_AGENT_WEBHOOK) {
+                // Dùng params.AI_AGENT_WEBHOOK thay vì env. Kiểm tra xem người dùng có nhập link không.
+                if (params.AI_AGENT_WEBHOOK?.trim()) {
                     // Tự động nối thêm đuôi /webhook vào URL gốc
-                    def webhookUrl = "${env.AI_AGENT_WEBHOOK}/webhook" 
+                    def webhookUrl = "${params.AI_AGENT_WEBHOOK.trim()}/webhook" 
                     
                     def payload = """
                     {
@@ -88,9 +96,9 @@ pipeline {
                     -H "Bypass-Tunnel-Reminder: true" \
                     -d '${payload}' ${webhookUrl}
                     """
-                    echo "✅ Đã gửi tín hiệu trạng thái (${currentBuild.currentResult}) tới AI Agent!"
+                    echo "✅ Đã gửi tín hiệu trạng thái (${currentBuild.currentResult}) tới AI Agent tại: ${webhookUrl}"
                 } else {
-                    echo "⚠️ LƯU Ý: Không tìm thấy biến AI_AGENT_WEBHOOK trên Jenkins. Bỏ qua gọi AI."
+                    echo "⚠️ LƯU Ý: Không có link Tunnel nào được nhập. Bỏ qua gọi AI."
                 }
             }
         }
