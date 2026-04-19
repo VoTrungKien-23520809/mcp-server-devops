@@ -4,6 +4,7 @@ import subprocess
 import re
 import requests
 import time
+import json
 from mcp.server.fastmcp import FastMCP
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -305,6 +306,74 @@ def read_project_file(file_path: str) -> str:
         return f"❌ Lỗi: Không tìm thấy file '{file_path}'"
     except Exception as e:
         return f"❌ Lỗi khi đọc file {file_path}: {str(e)}"
+    
+# ==========================================
+# NHÓM TOOLS: MONITORING & HEALTH CHECK
+# ==========================================
+
+# Tool 11: AI dùng cái này để xem trạng thái các Pod (như lệnh 'kubectl get pods')
+@mcp.tool()
+def check_system_health(namespace: str = "default") -> str:
+    """Kiểm tra tổng quan sức khỏe của các Pods trong K3s."""
+    logger.info(f"🏥 AI đang kiểm tra sức khỏe K8s (namespace: {namespace})")
+    try:
+        result = _run_ssh_kubectl(["get", "pods", "-n", namespace, "-o", "wide"])
+        lines = result.stdout.strip().split('\n')
+        
+        if len(lines) <= 1: return f"⚠️ Không tìm thấy Pod nào trong '{namespace}'."
+
+        health_report = [f"--- TÌNH TRẠNG PODS ({namespace}) ---"]
+        for line in lines[1:]:
+            parts = line.split()
+            if len(parts) >= 3:
+                pod_name, ready, status = parts[0], parts[1], parts[2]
+                if status not in ["Running", "Completed"]:
+                    health_report.append(f"🔴 LỖI: {pod_name} | Trạng thái: {status} | Ready: {ready}")
+                else:
+                    health_report.append(f"🟢 TỐT: {pod_name} | Trạng thái: {status}")
+        return "\n".join(health_report)
+    except subprocess.CalledProcessError as e:
+        return f"❌ Lỗi K8s: {e.stderr}"
+    
+# ==========================================
+# NHÓM TOOLS: AUTO-REMEDIATION (HÀNH ĐỘNG SỬA CHỮA)
+# ==========================================
+
+# Tool 12: AI dùng cái này để xóa/khởi động lại một Pod bị lỗi
+@mcp.tool()
+def restart_pod(pod_name: str, namespace: str = "default") -> str:
+    """Khởi động lại một Pod cụ thể bằng cách xóa nó đi."""
+    logger.info(f"🔄 AI đang RESTART Pod: {pod_name}")
+    try:
+        result = _run_ssh_kubectl(["delete", "pod", pod_name, "-n", namespace])
+        return f"✅ Đã gửi lệnh xóa Pod '{pod_name}' thành công.\nLog: {result.stdout.strip()}"
+    except subprocess.CalledProcessError as e:
+        return f"❌ Lỗi restart Pod: {e.stderr}"
+
+# Tool 13: AI dùng cái này để tăng giảm số lượng Pod khi quá tải
+@mcp.tool()
+def scale_deployment(deployment_name: str, replicas: int, namespace: str = "default") -> str:
+    """Tăng/Giảm số lượng Pods của một Deployment (Tối đa 5)."""
+    logger.info(f"⚖️ AI đang SCALE Deployment: {deployment_name} -> {replicas}")
+    if replicas > 5 or replicas < 1:
+        return "❌ TỪ CHỐI LỆNH: Replicas phải nằm trong khoảng từ 1 đến 5."
+        
+    try:
+        result = _run_ssh_kubectl(["scale", "deployment", deployment_name, f"--replicas={replicas}", "-n", namespace])
+        return f"✅ Đã scale Deployment '{deployment_name}' lên {replicas} thành công.\nLog: {result.stdout.strip()}"
+    except subprocess.CalledProcessError as e:
+        return f"❌ Lỗi scale: {e.stderr}"
+    
+# Tool 14: AI dùng cái này để lùi phiên bản K8s nếu code mới bị lỗi
+@mcp.tool()
+def rollback(deployment_name: str, namespace: str = "default") -> str:
+    """Quay ngược (Undo) bản deploy hiện tại về phiên bản trước đó nếu phát hiện lỗi CRASH."""
+    logger.info(f"⏪ AI đang ROLLBACK Deployment: {deployment_name}")
+    try:
+        result = _run_ssh_kubectl(["rollout", "undo", f"deployment/{deployment_name}", "-n", namespace])
+        return f"✅ Đã rollback Deployment '{deployment_name}' thành công.\nLog: {result.stdout.strip()}"
+    except subprocess.CalledProcessError as e:
+        return f"❌ Lỗi rollback: {e.stderr}"
 
 if __name__ == "__main__":
     mcp.run()
