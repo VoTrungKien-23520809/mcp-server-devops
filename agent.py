@@ -349,11 +349,82 @@ Nhiệm vụ của bạn: Job Jenkins '{job_name}' VỪA DEPLOY THÀNH CÔNG.
 
 
 # ==========================================
+# 4. BỘ NÃO SMART CD (TÍCH HỢP VÀO TIẾN TRÌNH CI/CD)
+# ==========================================
+async def run_smart_cd_approval(k8s_dir: str = "weather-app/k8s"):
+    print(f"\n🛑 [SMART CD] AI ĐANG THẨM ĐỊNH RỦI RO TRIỂN KHAI CHO THƯ MỤC: {k8s_dir}")
+    server_params = StdioServerParameters(command="python", args=["main.py"])
+
+    try:
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                
+                SYSTEM_PROMPT = """Bạn là một Kỹ sư SecOps/Gatekeeper.
+Quyết định xem có cho phép đưa mã nguồn mới (Apply Terraform) lên Production không.
+
+QUY TẮC ĐIỀU TRA:
+1. THOUGHT: Suy nghĩ NGẮN GỌN.
+2. ACTION: CHỈ GỌI 1 TOOL.
+
+Danh sách Tools:
+- get_terraform_plan: {"tf_directory": "đường-dẫn"}
+- fetch_metrics: {}
+- check_system_health: {"namespace": "default"}
+
+ĐỊNH DẠNG 1 (GỌI TOOL):
+Thought: [Suy nghĩ]
+Action: [tên-tool]
+Action Input: [JSON]
+
+ĐỊNH DẠNG 2 (QUYẾT ĐỊNH PHÊ DUYỆT):
+Final Answer:
+#### QUYẾT ĐỊNH: [CHỈ GHI '🟢 APPROVE' HOẶC '🔴 REJECT']
+#### 1. Đánh giá rủi ro Terraform: (Có xóa tài nguyên quan trọng không?)
+#### 2. Sức chịu tải K8s: (Metrics hiện tại có an toàn không?)
+#### 3. Lý do: (Giải thích ngắn gọn)
+"""
+                USER_TASK = f"""
+Hãy thẩm định rủi ro trước khi deploy:
+1. Gọi `fetch_metrics` và `check_system_health` để xem hệ thống có đang quá tải/lỗi không.
+2. Gọi `read_project_file` với tham số là '{k8s_dir}/deployment.yaml' để đọc cấu hình bản cập nhật sắp được đưa lên.
+3. Đưa ra Quyết định APPROVE (Cho phép) hoặc REJECT (Từ chối).
+"""
+                history = ""
+                max_steps = 5 
+                for step in range(max_steps):
+                    prompt = f"{SYSTEM_PROMPT}\n\nLịch sử:\n{history}\n\nNhiệm vụ: {USER_TASK}\n\nBước tiếp theo là gì?"
+                    response = await asyncio.to_thread(llm.invoke, prompt) # Buff bất tử
+                    print(f"🤖 AI Suy nghĩ:\n{response}\n")
+                    
+                    if "Final Answer:" in response:
+                        report = response.split("Final Answer:")[1].strip()
+                        send_discord_alert(f"📋 **SMART CD: KẾT QUẢ THẨM ĐỊNH DEPLOY** 📋\n\n{report}")
+                        break
+                        
+                    action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
+                    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
+                    
+                    if action_match and input_match:
+                        tool_name = action_match.group(1).strip()
+                        try:
+                            tool_args = json.loads(re.sub(r'```json\s*|```', '', input_match.group(1).strip()))
+                            result = await session.call_tool(tool_name, arguments=tool_args)
+                            history += f"\nThought: {response}\nObservation: {result.content[0].text}\n"
+                        except Exception as e:
+                            history += f"\nObservation: LỖI GỌI TOOL: {str(e)}\n"
+                    else:
+                        history += "\nObservation: Sai định dạng.\n"
+    except Exception as e:
+        print(f"❌ Lỗi Smart CD: {e}")
+
+# ==========================================
 # CÁC CỔNG NHẬN TÍN HIỆU (WEBHOOKS)
 # ==========================================
 is_investigating = False 
 is_metrics_investigating = False
 is_reporting = False
+is_cd_approving = False
 
 async def run_investigation_wrapper(job_name):
     global is_investigating
@@ -379,12 +450,21 @@ async def run_success_report_wrapper(job_name):
         is_reporting = False
         print("✅ AI đã tổng hợp báo cáo Deploy xong. Nhả cờ khóa.")
 
+async def run_smart_cd_wrapper(tf_dir):
+    global is_cd_approving
+    try: 
+        await run_smart_cd_approval(tf_dir)
+    finally: 
+        is_cd_approving = False
+        print("✅ AI đã thẩm định Deploy xong. Nhả cờ khóa.")
+
 @app.post("/webhook")
 async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
-    global is_investigating, is_reporting
+    global is_investigating, is_reporting, is_cd_approving
     data = await request.json()
     job_name = data.get("job_name", "weather-app-pipeline")
     status = data.get("status")
+    k8s_dir = data.get("k8s_dir", "weather-app/k8s")
 
     print(f"\n📥 [JENKINS WEBHOOK] Nhận tín hiệu: Job '{job_name}' - Trạng thái: {status}")
 
@@ -407,6 +487,16 @@ async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
         is_reporting = True
         background_tasks.add_task(run_success_report_wrapper, job_name)
         return {"message": "AI Agent đang tổng hợp báo cáo sau khi Deploy thành công!"}
+    
+    elif status == "PENDING_APPROVAL":
+        if is_cd_approving: 
+            print("🛑 AI đang bận thẩm định, bỏ qua Webhook bị spam!")
+            return {"message": "AI đang bận, bỏ qua."}
+        
+
+        is_cd_approving = True
+        background_tasks.add_task(run_smart_cd_wrapper, k8s_dir)
+        return {"message": "AI đang tiến hành thẩm định Smart CD rủi ro Deploy!"}
     
     return {"message": "Trạng thái không xác định."}
 

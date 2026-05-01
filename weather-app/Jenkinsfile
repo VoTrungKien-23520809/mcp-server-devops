@@ -54,6 +54,42 @@ pipeline {
             }
         }
 
+        // =========================================================
+        // SMART CD
+        // =========================================================
+        stage('Smart CD Approval (AI Gatekeeper)') {
+            steps {
+                script {
+                    echo "🛑 Đang chuẩn bị Deploy. Tiến hành gọi AI thẩm định rủi ro..."
+                    
+                    if (params.AI_AGENT_WEBHOOK?.trim()) {
+                        def webhookUrl = "${params.AI_AGENT_WEBHOOK.trim()}/webhook" 
+                        def payload = """
+                        {
+                            "job_name": "${JOB_NAME}",
+                            "status": "PENDING_APPROVAL",
+                            "k8s": "weather-app/k8s"
+                        }
+                        """
+                        
+                        sh """
+                        curl -X POST \
+                        -H "Content-Type: application/json" \
+                        -H "Bypass-Tunnel-Reminder: true" \
+                        -d '${payload}' ${webhookUrl}
+                        """
+                        echo "✅ Đã gửi yêu cầu PENDING_APPROVAL tới AI Agent!"
+                    } else {
+                        echo "⚠️ Không có link Webhook, bỏ qua bước AI thẩm định."
+                    }
+                }
+
+                timeout(time: 1, unit: 'HOURS') {
+                    input message: "🛑 AI đang thẩm định rủi ro! Hãy đọc báo cáo trên Discord. Bạn có muốn tiếp tục Deploy không?", ok: "Phê duyệt & Deploy!"
+                }
+            }
+        }
+
         stage('Deploy to K3s') {
             steps {
                 dir('weather-app'){
