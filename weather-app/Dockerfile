@@ -3,7 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Bơm thêm build-essential và gcc để compile các thư viện Data/C++
-RUN apt-get update && \
+RUN apt-get update && apt-get upgrade -y && \
     apt-get install -y \
     wget \
     unzip \
