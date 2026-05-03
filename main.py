@@ -342,7 +342,11 @@ def check_system_health(namespace: str = "default") -> str:
 # Tool 12: AI dùng cái này để xóa/khởi động lại một Pod bị lỗi
 @mcp.tool()
 def restart_pod(pod_name: str, namespace: str = "default") -> str:
-    """Khởi động lại một Pod cụ thể bằng cách xóa nó đi."""
+    """""
+    Khởi động lại một Pod.
+    CẢNH BÁO: CHỈ DÙNG khi Pod bị treo ngẫu nhiên.
+    TUYỆT ĐỐI CẤM SỬ DỤNG nếu Pod đang ở trạng thái CrashLoopBackOff, Error, hoặc ErrImagePull.
+    """
     logger.info(f"🔄 AI đang RESTART Pod: {pod_name}")
     try:
         result = _run_ssh_kubectl(["delete", "pod", pod_name, "-n", namespace])
@@ -367,7 +371,10 @@ def scale_deployment(deployment_name: str, replicas: int, namespace: str = "defa
 # Tool 14: AI dùng cái này để lùi phiên bản K8s nếu code mới bị lỗi
 @mcp.tool()
 def rollback(deployment_name: str, namespace: str = "default") -> str:
-    """Quay ngược (Undo) bản deploy hiện tại về phiên bản trước đó nếu phát hiện lỗi CRASH."""
+    """
+    Khôi phục (Undo/Rollback) Deployment về phiên bản hoạt động trước nếu phát hiện lỗi CRASH.
+    BẮT BUỘC PHẢI SỬ DỤNG ngay lập tức khi phát hiện lỗi CrashLoopBackOff hoặc cấu hình sai lan rộng khiến Pod mới không thể khởi động.
+    """
     logger.info(f"⏪ AI đang ROLLBACK Deployment: {deployment_name}")
     try:
         result = _run_ssh_kubectl(["rollout", "undo", f"deployment/{deployment_name}", "-n", namespace])
