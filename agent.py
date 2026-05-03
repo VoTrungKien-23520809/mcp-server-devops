@@ -5,6 +5,8 @@ import json
 import re
 import requests
 import uvicorn
+import subprocess
+from pyngrok import ngrok, conf
 from fastapi import FastAPI, BackgroundTasks, Request
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -21,6 +23,58 @@ llm = OllamaLLM(model=Model_name)
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 app = FastAPI()
+
+def setup_self_register_webhook():
+    print("🌐 Đang khởi động hệ thống Tự động đăng ký Webhook (K3s Mode)...")
+    
+    auth_token = os.getenv("NGROK_AUTH_TOKEN")
+    if not auth_token:
+        print("⚠️ LỖI: Thiếu NGROK_AUTH_TOKEN trong .env")
+        return None
+
+    try:
+        #Cấu hình và khởi động Ngrok tunnel tại cổng 5000
+        conf.get_default().auth_token = auth_token
+        public_url = ngrok.connect(5000).public_url
+        webhook_url = f"{public_url}/prometheus-webhook"
+        print(f"🚀 Ngrok Tunnel đã mở: {public_url}")
+        print(f"🔗 Link Webhook mục tiêu: {webhook_url}")
+
+        azure_ip = os.getenv("AZURE_IP")
+        ssh_key = os.getenv("SSH_KEY_PATH")
+        
+        #Chuỗi lệnh Bash tự động lấy Secret, sửa URL và apply lại vào K3s
+        bash_script = f"""
+        export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+        
+        kubectl get secret alertmanager-prom-stack-kube-prometheus-alertmanager -n monitoring -o jsonpath='{{.data.alertmanager\\.yaml}}' | base64 --decode > /tmp/am.yaml
+        
+        sed -i "s|url:.*|url: '{webhook_url}'|g" /tmp/am.yaml
+        
+        kubectl create secret generic alertmanager-prom-stack-kube-prometheus-alertmanager -n monitoring --from-file=alertmanager.yaml=/tmp/am.yaml --dry-run=client -o yaml | kubectl apply -f -
+        
+        rm /tmp/am.yaml
+        """
+
+        full_ssh_cmd = [
+            "ssh", "-o", "StrictHostKeyChecking=no", "-i", ssh_key,
+            f"azureuser@{azure_ip}",
+            "bash", "-c", bash_script
+        ]
+
+        print(f"📡 Đang kết nối tới Azure ({azure_ip}) để cập nhật Secret Alertmanager...")
+        result = subprocess.run(full_ssh_cmd, capture_output=True, text=True, timeout=30)
+
+        if result.returncode == 0:
+            print("✅ Alertmanager (K3s) đã được cập nhật link Webhook mới tự động!")
+            return webhook_url
+        else:
+            print(f"❌ Lỗi khi cập nhật cấu hình K3s: {result.stderr}")
+            return None
+
+    except Exception as e:
+        print(f"❌ Lỗi trong quá trình tự đăng ký: {str(e)}")
+        return None
 
 def send_discord_alert(message):
     """Hàm bắn báo cáo sang Discord qua Webhook có cơ chế chia nhỏ tin nhắn"""
@@ -211,6 +265,15 @@ Final Answer:
 #### 2. Tình trạng thực tế: (Trích xuất data từ fetch_metrics, get_k8s_nodes và check_system_health).
 #### 3. Phân tích Ứng dụng: (Có pod nào đang spam log hoặc ngốn tài nguyên không?).
 #### 4. Hành động Tự động đã thực hiện (Auto-remediation): (BẮT BUỘC NÊU RÕ bạn đã dùng lệnh scale, restart hay rollback nào, số lượng bao nhiêu, và kết quả log trả về ra sao).
+
+QUY TẮC XỬ LÝ SỰ CỐ NGHIÊM NGẶT (MUST FOLLOW):
+1. ĐỊNH TUYẾN DEADLOCK: Nếu Alert Name là "AppDeadlock" hoặc nội dung chứa từ "Deadlock":
+   - BỎ QUA bước kiểm tra log ứng dụng (get_app_logs).
+   - BẮT BUỘC gọi công cụ `restart_pod` ngay lập tức để giải phóng bộ nhớ. Không được phép dùng `rollback`.
+2. ĐỊNH TUYẾN CRASHLOOP: Nếu Pod ở trạng thái 'CrashLoopBackOff', 'Error', hoặc 'ImagePullBackOff':
+   - TUYỆT ĐỐI KHÔNG dùng `restart_pod`.
+   - BẮT BUỘC gọi công cụ `rollback` để quay về revision an toàn.
+3. NGHIÊM CẤM suy diễn nguyên nhân từ các cảnh báo log cũ (như 'client.caching') nếu trạng thái Pod vẫn đang Running.
 """
 
                 USER_TASK = f"""
@@ -230,7 +293,7 @@ TUYỆT ĐỐI KHÔNG ĐƯỢC nhét lệnh Action vào bên trong khối Final 
 """
 
                 history = ""
-                max_steps = 7 
+                max_steps = 10 
                 
                 for step in range(max_steps):
                     print(f"\n--- [Vòng lặp Hạ Tầng thứ {step + 1}/{max_steps}] ---")
@@ -360,19 +423,19 @@ async def run_smart_cd_approval(k8s_dir: str = "weather-app/k8s"):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 
-                SYSTEM_PROMPT = """Bạn là một Kỹ sư SecOps/Gatekeeper.
-Quyết định xem có cho phép đưa mã nguồn mới (Apply Terraform) lên Production không.
+                SYSTEM_PROMPT = """Bạn là một Kỹ sư SecOps/Gatekeeper cấp cao.
+Nhiệm vụ của bạn là quyết định xem có cho phép đưa bản cập nhật ứng dụng (Kubernetes Deployment) lên môi trường Production hay không.
 
 QUY TẮC ĐIỀU TRA:
-1. THOUGHT: Suy nghĩ NGẮN GỌN.
-2. ACTION: CHỈ GỌI 1 TOOL.
+1. THOUGHT: Suy nghĩ NGẮN GỌN (tối đa 4 câu).
+2. ACTION: CHỈ GỌI 1 TOOL DUY NHẤT trong mỗi vòng lặp.
 
 Danh sách Tools:
-- get_terraform_plan: {"tf_directory": "đường-dẫn"}
+- read_project_file: {"file_path": "đường-dẫn"}
 - fetch_metrics: {}
 - check_system_health: {"namespace": "default"}
 
-ĐỊNH DẠNG 1 (GỌI TOOL):
+ĐỊNH DẠNG 1 (GỌI TOOL):câu
 Thought: [Suy nghĩ]
 Action: [tên-tool]
 Action Input: [JSON]
@@ -380,9 +443,9 @@ Action Input: [JSON]
 ĐỊNH DẠNG 2 (QUYẾT ĐỊNH PHÊ DUYỆT):
 Final Answer:
 #### QUYẾT ĐỊNH: [CHỈ GHI '🟢 APPROVE' HOẶC '🔴 REJECT']
-#### 1. Đánh giá rủi ro Terraform: (Có xóa tài nguyên quan trọng không?)
-#### 2. Sức chịu tải K8s: (Metrics hiện tại có an toàn không?)
-#### 3. Lý do: (Giải thích ngắn gọn)
+#### 1. Đánh giá rủi ro cấu hình K8s: (Phân tích file deployment.yaml. Có dùng image: latest không? Số lượng replicas có hợp lý không? Có giới hạn tài nguyên resources limit không?)
+#### 2. Sức chịu tải K8s: (CPU/RAM hiện tại có an toàn để deploy không?)
+#### 3. Lý do: (Giải thích ngắn gọn quyết định của bạn)
 """
                 USER_TASK = f"""
 Hãy thẩm định rủi ro trước khi deploy:
@@ -393,6 +456,7 @@ Hãy thẩm định rủi ro trước khi deploy:
                 history = ""
                 max_steps = 5 
                 for step in range(max_steps):
+                    print(f"\n--- [Vòng lặp Smart CD thứ {step + 1}/{max_steps}] ---")
                     prompt = f"{SYSTEM_PROMPT}\n\nLịch sử:\n{history}\n\nNhiệm vụ: {USER_TASK}\n\nBước tiếp theo là gì?"
                     response = await asyncio.to_thread(llm.invoke, prompt) # Buff bất tử
                     print(f"🤖 AI Suy nghĩ:\n{response}\n")
@@ -533,6 +597,13 @@ async def prometheus_webhook(request: Request, background_tasks: BackgroundTasks
 
 
 if __name__ == "__main__":
+    new_webhook = setup_self_register_webhook()
+    
+    if new_webhook:
+        print(f"\n✨ AGENT ĐÃ SẴN SÀNG TẠI: {new_webhook}")
+    else:
+        print("\n⚠️ Cảnh báo: Tự động đăng ký thất bại, bạn có thể phải cập nhật thủ công.")
+        
     print("🚀 AIOps Server đang lắng nghe trên cổng 5000...")
     print("👉 Endpoint 1 (Jenkins): /webhook")
     print("👉 Endpoint 2 (Prometheus): /prometheus-webhook")
