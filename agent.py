@@ -4,6 +4,8 @@ import sys
 import json
 import re
 import requests
+import signal
+import threading
 import uvicorn
 import subprocess
 from pyngrok import ngrok, conf
@@ -586,29 +588,33 @@ async def run_investigation_wrapper(job_name):
     try:
         await run_investigation(job_name)
     finally:
-        release_llm_lock()
         print("✅ AI đã điều tra Jenkins xong. Nhả cờ khóa.")
+        print("-" * 60)
+        release_llm_lock()
 async def run_metrics_investigation_wrapper(alert_name, alert_desc):
     await acquire_llm_lock(f"Điều tra Hạ tầng (Alert: {alert_name})")
     try:
         await run_metrics_investigation(alert_name, alert_desc)
     finally:
-        release_llm_lock()
         print("✅ AI đã điều tra Hạ tầng xong. Nhả cờ khóa.")
+        print("-" * 60)
+        release_llm_lock()
 async def run_success_report_wrapper(job_name):
     await acquire_llm_lock(f"Báo cáo Deploy (Job: {job_name})")
     try:
         await run_success_report(job_name)
     finally:
+        print("✅ AI đã báo cáo Deploy xong. Nhả cờ khóa.")
+        print("-" * 60)
         release_llm_lock()
-        print("✅ AI đã tổng hợp báo cáo Deploy xong. Nhả cờ khóa.")
 async def run_smart_cd_wrapper(tf_dir):
     await acquire_llm_lock(f"Thẩm định Smart CD ({tf_dir})")
     try: 
         await run_smart_cd_approval(tf_dir)
     finally: 
+        print("✅ AI đã thẩm định Smart CD xong. Nhả cờ khóa.")
+        print("-" * 60)
         release_llm_lock()
-        print("✅ AI đã thẩm định Deploy xong. Nhả cờ khóa.")
 @app.post("/webhook")
 async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
@@ -751,6 +757,7 @@ Final Answer: [Câu trả lời]
     except Exception as e:
         print(f"❌ Lỗi Chatbot: {e}")
     finally:
+        print("-" * 60)
         release_llm_lock()
 
 # ==========================================
@@ -760,7 +767,10 @@ async def chat_loop():
     await asyncio.sleep(2) # Chờ server khởi động
     print("\n" + "="*40)
     print("✨ CHATBOT CLI ĐÃ SẴN SÀNG ✨")
-    print("Bạn có thể đặt câu hỏi hoặc yêu cầu kiểm tra hệ thống.")
+    print("💡 Hướng dẫn thao tác:")
+    print("   - Nhấn [Alt + Enter] để xuống dòng khi gõ.")
+    print("   - Gõ 'exit' hoặc nhấn [Ctrl + C] 2 lần liên tiếp để thoát.")
+    print("   - Gõ yêu cầu của bạn và nhấn [Enter] để gửi.")
     print("="*40 + "\n")
     
     kb = KeyBindings()
@@ -780,16 +790,22 @@ async def chat_loop():
     cli_session = session
     
     while True:
-        if llm_lock.locked():
-            # Nếu đang bị khóa, đợi cho đến khi rảnh
-            await llm_lock.acquire()
-            llm_lock.release()
-            
         try:
+            if llm_lock.locked():
+                # Nếu đang bị khóa, đợi cho đến khi rảnh
+                await llm_lock.acquire()
+                llm_lock.release()
+                
             with patch_stdout():
-                prompt_task = asyncio.create_task(session.prompt_async("\nBạn: ", default=saved_prompt_text))
+                prompt_task = asyncio.create_task(session.prompt_async("\nBạn: ", default=saved_prompt_text, handle_sigint=False))
                 user_input = await prompt_task
                 saved_prompt_text = ""
+                
+            # Khôi phục lá chắn bảo vệ vì prompt_toolkit đã xóa nó sau khi xong
+            try:
+                asyncio.get_running_loop().add_signal_handler(signal.SIGINT, global_sigint_handler)
+            except NotImplementedError:
+                pass
                 
             if not user_input.strip():
                 continue
@@ -807,11 +823,22 @@ async def chat_loop():
                 
             await run_chatbot(user_input)
         except (KeyboardInterrupt, EOFError):
-            print("\n[Hệ thống] Hủy lệnh hiện tại. Gõ 'exit' để thoát hoàn toàn.")
-            saved_prompt_text = ""
-            continue
+            print("\n👋 Tạm biệt! Đang thoát chương trình...")
+            try:
+                ngrok.kill()
+            except:
+                pass
+            os._exit(0)
+            
         except asyncio.CancelledError:
-            # Prompt bị hủy bởi luồng chạy ngầm để tạm ẩn, sẽ tự động mở lại ở vòng lặp sau
+            global cancelled_by_user
+            if cancelled_by_user:
+                # User bấm Ctrl+C lần 1
+                cancelled_by_user = False
+                saved_prompt_text = ""
+            else:
+                # Prompt bị hủy bởi luồng chạy ngầm (Webhook) để tạm ẩn, sẽ tự động mở lại sau
+                pass
             continue
         except Exception as e:
             print(f"Lỗi: {e}")
@@ -839,7 +866,47 @@ async def tail_mcp_log():
     except Exception as e:
         print(f"⚠️ Lỗi đọc log MCP: {e}")
 
+import time
+
+cancelled_by_user = False
+ctrl_c_count = 0
+last_ctrl_c_time = 0
+
+def global_sigint_handler():
+    global prompt_task, cancelled_by_user, ctrl_c_count, last_ctrl_c_time
+    
+    current_time = time.time()
+    if current_time - last_ctrl_c_time > 3:
+        ctrl_c_count = 0
+    
+    last_ctrl_c_time = current_time
+    ctrl_c_count += 1
+    
+    if ctrl_c_count >= 2:
+        print("\n👋 Tạm biệt! Đang thoát chương trình...")
+        try:
+            ngrok.kill()
+        except:
+            pass
+        os._exit(0)
+        
+    # Khi AI đang chạy
+    if llm_lock.locked():
+        print("\n[Hệ thống] 🛡️ AI đang chạy. Nhấn Ctrl+C lần nữa trong 3s để BẮT BUỘC thoát.")
+    else:
+        print("\n[Hệ thống] Nhấn Ctrl+C lần nữa trong 3s để thoát chương trình.")
+        cancelled_by_user = True
+        if prompt_task and not prompt_task.done():
+            prompt_task.cancel()
+
 async def main():
+    loop = asyncio.get_running_loop()
+    try:
+        loop.add_signal_handler(signal.SIGINT, global_sigint_handler)
+    except NotImplementedError:
+        # Bỏ qua nếu chạy trên Windows (add_signal_handler không hỗ trợ Windows)
+        pass
+        
     # Khởi chạy luồng theo dõi log MCP ngầm
     log_task = asyncio.create_task(tail_mcp_log())
     
@@ -853,10 +920,19 @@ async def main():
     print("👉 Endpoint 1 (Jenkins): /webhook")
     print("👉 Endpoint 2 (Prometheus): /prometheus-webhook")
     
-    # Khởi chạy Uvicorn trong background task thay vì block main thread
-    config = uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="warning")
-    server = uvicorn.Server(config)
-    server_task = asyncio.create_task(server.serve())
+    # Khởi chạy Uvicorn trên một luồng hoàn toàn độc lập (Thread)
+    # Điều này giúp Uvicorn có Event Loop riêng và hoàn toàn miễn nhiễm với Ctrl+C (vốn chỉ gửi vào Main Thread)
+    def run_uvicorn():
+        config = uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="warning")
+        server = uvicorn.Server(config)
+        import contextlib
+        @contextlib.contextmanager
+        def noop_capture_signals():
+            yield
+        server.capture_signals = noop_capture_signals
+        server.run()
+        
+    threading.Thread(target=run_uvicorn, daemon=True).start()
     
     # Khởi chạy Chatbot CLI
     await chat_loop()
