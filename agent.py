@@ -4,22 +4,95 @@ import sys
 import json
 import re
 import requests
+import signal
+import threading
 import uvicorn
 import subprocess
 from pyngrok import ngrok, conf
 from fastapi import FastAPI, BackgroundTasks, Request
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from contextlib import asynccontextmanager
 from langchain_ollama import OllamaLLM
 from dotenv import load_dotenv
+from prompt_toolkit import PromptSession
+from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.key_binding import KeyBindings
+
+import psutil
+
+@asynccontextmanager
+async def intercepted_stdio_client(server_params):
+    r, w = os.pipe()
+    wf = os.fdopen(w, "w")
+    
+    async def read_pipe():
+        f = os.fdopen(r, "r")
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                line = await loop.run_in_executor(None, f.readline)
+                if not line:
+                    break
+                if line.strip():
+                    print(f"⚙️ [MCP] {line.strip()}")
+            except:
+                break
+                
+    reader_task = asyncio.create_task(read_pipe())
+    
+    try:
+        async with stdio_client(server_params, errlog=wf) as (read, write):
+            yield (read, write)
+    finally:
+        try:
+            wf.close()
+        except:
+            pass
+        await asyncio.sleep(0.1)
+        reader_task.cancel()
 
 load_dotenv()
 
 # ==========================================
 # CẤU HÌNH HỆ THỐNG
 # ==========================================
+def analyze_system_hardware():
+    ram_gb = psutil.virtual_memory().total / (1024**3)
+    vram_gb = 0
+    gpu_name = "N/A"
+    try:
+        nvidia_smi = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"], 
+            text=True
+        )
+        if nvidia_smi.strip():
+            parts = nvidia_smi.strip().split(',')
+            gpu_name = parts[0].strip()
+            vram_gb = float(parts[1].strip()) / 1024
+    except Exception:
+        pass
+    
+    print(f"💻 Thông số phần cứng: RAM {ram_gb:.1f}GB | VRAM {vram_gb:.1f}GB ({gpu_name})")
+    
+    if ram_gb > 31 or vram_gb >= 16:
+        ctx = 16384
+        history_chars = 60000
+        print("🚀 Kích hoạt cấu hình: MAX SETTINGS (Context: 16k tokens)")
+    elif ram_gb > 15 or vram_gb >= 8:
+        ctx = 8192
+        history_chars = 30000
+        print("⚖️ Kích hoạt cấu hình: TIÊU CHUẨN (Context: 8k tokens)")
+    else:
+        ctx = 4096
+        history_chars = 15000
+        print("🛡️ Kích hoạt cấu hình: AN TOÀN (Context: 4k tokens)")
+        
+    return ctx, history_chars
+
+OPT_CTX, MAX_HISTORY_CHARS = analyze_system_hardware()
 Model_name = "qwen2.5:14b"
-llm = OllamaLLM(model=Model_name)
+llm = OllamaLLM(model=Model_name, num_ctx=OPT_CTX)
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 app = FastAPI()
@@ -111,7 +184,7 @@ async def run_investigation(job_name: str):
     server_params = StdioServerParameters(command="python", args=["main.py"])
 
     try:
-        async with stdio_client(server_params) as (read, write):
+        async with intercepted_stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 print("✅ Đã kết nối thành công tới MCP Server (CI/CD Mode)!")
@@ -122,7 +195,8 @@ QUY TẮC ĐIỀU TRA (REACT LOOP):
 2. ACTION: Bạn CHỈ ĐƯỢC GỌI 1 TOOL DUY NHẤT trong mỗi vòng lặp. Phải đợi có kết quả rồi mới gọi tool tiếp theo.
 
 Danh sách Tools:
-- get_jenkins_logs: {"job_name": "tên-job"}
+- get_build_overview: {"job_name": "tên-job"}
+- get_jenkins_logs: {"job_name": "tên-job", "target_stage": "Tên Stage (Tùy chọn)"}
 - get_app_logs: {"namespace": "tên-namespace", "label_selector": "app=tên-app"}
 - get_k8s_nodes: {}
 - fetch_metrics: {}
@@ -139,38 +213,30 @@ Thought: [Suy nghĩ ngắn gọn xem bước tiếp theo làm gì]
 Action: [tên-tool]
 Action Input: [JSON]
 
-ĐỊNH DẠNG 2 (CHỈ GỌI KHI ĐÃ CÓ ĐỦ DỮ LIỆU TỪ JENKINS, METRICS VÀ K3S LOGS):
-Thought: Tôi đã thu thập đủ dữ liệu thực tế và sẵn sàng báo cáo.
+ĐỊNH DẠNG 2 (CHỈ GỌI KHI ĐÃ TÌM RA NGUYÊN NHÂN LỖI HOẶC ĐÃ THU THẬP ĐỦ DỮ LIỆU):
+Thought: Tôi đã tìm ra nguyên nhân và sẵn sàng báo cáo.
 Final Answer:
 [BẠN BẮT BUỘC PHẢI VIẾT BÁO CÁO SRE TOÀN DIỆN BẰNG TIẾNG VIỆT, SỬ DỤNG MARKDOWN CHUYÊN NGHIỆP VỚI CẤU TRÚC SAU:]
 #### 1. Tình trạng Hạ Tầng & CI/CD:
-- (Phân tích chi tiết log lỗi từ Jenkins).
-#### 2. Đánh giá Hiệu năng:
-- (Nêu rõ % CPU, RAM và đánh giá mức độ tải).
-#### 3. Tình trạng Ứng Dụng:
-- (Trích xuất và phân tích CHUYÊN SÂU các cảnh báo hoặc Exception từ App Logs).
-#### 4. Hành động tự động (Auto-remediation) & Giải pháp:
-- (Nêu rõ bạn đã dùng tool rollback/restart chưa, kết quả ra sao, hoặc đề xuất fix code).
+- (Phân tích chi tiết nguyên nhân lỗi dựa vào log Jenkins).
+#### 2. Tình trạng Ứng Dụng (Nếu có):
+- (Chỉ điền nếu bạn có kiểm tra log K8s hoặc Metrics, nếu không hãy ghi 'Không có bất thường' hoặc 'Không áp dụng').
+#### 3. Hành động khắc phục & Giải pháp:
+- (Đề xuất giải pháp sửa code, sửa Dockerfile, hoặc nêu rõ bạn đã dùng tool rollback/restart chưa).
 """
 
                 USER_TASK = f"""
 Nhiệm vụ điều tra bắt buộc:
-1. Gọi get_jenkins_logs (job_name: '{job_name}') để ĐỌC LOG của bản build vừa thất bại. TUYỆT ĐỐI KHÔNG kích hoạt build mới. Tự suy luận tên Deployment và Namespace bị ảnh hưởng từ nội dung log (nếu không rõ, hãy thử namespace 'default' hoặc 'staging').
-2. Đợi có kết quả log, gọi tiếp fetch_metrics.
-3. Đợi kết quả fetch_metrics. Gọi `check_system_health` để xem bản deploy lỗi này có làm chết Pod trên K8s không.
-4. BẮT BUỘC gọi get_app_logs (namespace 'default', app 'meteo-hist').
+1. BẮT BUỘC gọi `get_build_overview` (job_name: '{job_name}') ĐẦU TIÊN để xác định chính xác Stage nào bị lỗi (FAILED/UNSTABLE).
+2. Dựa vào kết quả trên, gọi `get_jenkins_logs` với tham số `target_stage` bằng tên Stage bị lỗi để lấy chi tiết nguyên nhân. (TUYỆT ĐỐI KHÔNG kích hoạt build mới).
 
 RẼ NHÁNH ĐIỀU TRA (TƯ DUY ĐỘNG - KHÔNG ĐOÁN MÒ):
-- Nếu Jenkins báo SUCCESS: Xuất Final Answer tổng hợp tình hình.
-- Nếu Jenkins báo FAILURE: Đọc kỹ log Jenkins để tìm manh mối. Dựa vào manh mối, tự suy luận xem cần dùng `list_directory` và `read_project_file` để đọc file nào (VD: Dockerfile, requirements.txt, .py). 
-
-RẼ NHÁNH ĐIỀU TRA ĐỐI VỚI K8S (TƯ DUY ĐỘNG - KHÔNG ĐOÁN MÒ):
+- Nếu Jenkins báo lỗi ở các giai đoạn sớm (như Build, Unit Test, Security Scan/Trivy): Nguyên nhân là do mã nguồn hoặc cấu hình. KHÔNG CẦN kiểm tra K8s (fetch_metrics, check_system_health, get_app_logs) vì ứng dụng chưa hề được Deploy. Hãy đọc log Jenkins để tìm lỗi và đề xuất cách sửa code.
+- CHỈ KHI Jenkins báo lỗi ở giai đoạn "Deploy" hoặc "Argo Rollouts": Mới gọi các tool `check_system_health` và `get_app_logs` (tự đoán namespace và app name từ log) để xem K8s có bị sập không.
 - Nếu thấy K8s có Pod bị CrashLoopBackOff/ImagePullBackOff, BẮT BUỘC gọi tool `rollback` để lùi về bản an toàn TRƯỚC KHI xuất Final Answer.
-- Nếu Pod K8s vẫn sống (ví dụ chỉ lỗi Unit Test/SonarQube), KHÔNG CẦN dùng tool rollback, chỉ cần xuất Final Answer.
-Chỉ khi TỰ MÌNH tìm thấy dòng code sai sót thì mới được xuất Final Answer.
 
 ⚠️ LƯU Ý SỐNG CÒN VỀ ĐƯỜNG DẪN (PATH):
-Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo (./). TUYỆT ĐỐI KHÔNG sử dụng đường dẫn tuyệt đối lấy từ log Jenkins (như /var/lib/jenkins/...). Bạn CHỈ ĐƯỢC phép dùng đường dẫn tương đối để tìm file (Ví dụ: 'weather-app/Dockerfile', 'weather-app/requirements.txt').
+Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo (./). TUYỆT ĐỐI KHÔNG sử dụng đường dẫn tuyệt đối lấy từ log Jenkins (như /var/lib/jenkins/...). Bạn CHỈ ĐƯỢC phép dùng đường dẫn tương đối (VD: 'weather-app/Dockerfile').
 """
 
                 history = ""
@@ -218,6 +284,9 @@ Khi dùng tool đọc file, bạn đang đứng ở thư mục gốc của Repo 
                     else:
                         print("⚠️ AI đang 'ngáo', không tuân thủ định dạng. Ép nó trả lời lại...")
                         history += f"\nThought: {response}\nObservation: LỖI: Bạn BẮT BUỘC phải dùng từ khóa 'Action:' và 'Action Input:' hoặc 'Final Answer:'.\n"
+                    
+                    if len(history) > MAX_HISTORY_CHARS:
+                        history = "...\n" + history[-MAX_HISTORY_CHARS:]
 
     except Exception as e:
         print(f"❌ Lỗi nghiêm trọng: {e}")
@@ -232,7 +301,7 @@ async def run_metrics_investigation(alert_name: str, alert_desc: str):
     server_params = StdioServerParameters(command="python", args=["main.py"])
 
     try:
-        async with stdio_client(server_params) as (read, write):
+        async with intercepted_stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 print("✅ Đã kết nối thành công tới MCP Server (Infra Mode)!")
@@ -323,6 +392,9 @@ TUYỆT ĐỐI KHÔNG ĐƯỢC nhét lệnh Action vào bên trong khối Final 
                             history += f"\nObservation: LỖI KHI GỌI TOOL: {str(e)}.\n"
                     else:
                         history += "\nObservation: Sai định dạng ReAct. Vui lòng thử lại.\n"
+                        
+                    if len(history) > MAX_HISTORY_CHARS:
+                        history = "...\n" + history[-MAX_HISTORY_CHARS:]
 
     except Exception as e:
         print(f"❌ Lỗi: {e}")
@@ -336,7 +408,7 @@ async def run_success_report(job_name: str):
     server_params = StdioServerParameters(command="python", args=["main.py"])
 
     try:
-        async with stdio_client(server_params) as (read, write):
+        async with intercepted_stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 print("✅ Đã kết nối thành công tới MCP Server (Report Mode)!")
@@ -404,6 +476,9 @@ Nhiệm vụ của bạn: Job Jenkins '{job_name}' VỪA DEPLOY THÀNH CÔNG.
                             history += f"\nObservation: LỖI KHI GỌI TOOL: {str(e)}.\n"
                     else:
                         history += "\nObservation: Sai định dạng ReAct. Vui lòng thử lại.\n"
+                        
+                    if len(history) > MAX_HISTORY_CHARS:
+                        history = "...\n" + history[-MAX_HISTORY_CHARS:]
 
     except Exception as e:
         import traceback
@@ -419,7 +494,7 @@ async def run_smart_cd_approval(k8s_dir: str = "weather-app/k8s"):
     server_params = StdioServerParameters(command="python", args=["main.py"])
 
     try:
-        async with stdio_client(server_params) as (read, write):
+        async with intercepted_stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 
@@ -483,48 +558,65 @@ Hãy thẩm định rủi ro trước khi deploy:
         print(f"❌ Lỗi Smart CD: {e}")
 
 # ==========================================
-# CÁC CỔNG NHẬN TÍN HIỆU (WEBHOOKS)
+# CÁC CỔNG NHẬN TÍN HIỆU (WEBHOOKS) & QUẢN LÝ LOCK
 # ==========================================
-is_investigating = False 
-is_metrics_investigating = False
-is_reporting = False
-is_cd_approving = False
+llm_lock = asyncio.Lock()
+current_llm_task = ""
+prompt_task = None
+saved_prompt_text = ""
+cli_session = None
+
+async def acquire_llm_lock(task_name: str) -> bool:
+    global current_llm_task, prompt_task, saved_prompt_text, cli_session
+    if llm_lock.locked():
+        print(f"\n[SYSTEM] Hệ thống đang bận: {current_llm_task}. Đang xếp hàng chờ...")
+    await llm_lock.acquire()
+    current_llm_task = task_name
+    if prompt_task and not prompt_task.done():
+        if cli_session:
+            saved_prompt_text = cli_session.default_buffer.text
+        prompt_task.cancel()
+    return True
+
+def release_llm_lock():
+    global current_llm_task
+    current_llm_task = ""
+    llm_lock.release()
 
 async def run_investigation_wrapper(job_name):
-    global is_investigating
+    await acquire_llm_lock(f"Điều tra lỗi Jenkins (Job: {job_name})")
     try:
         await run_investigation(job_name)
     finally:
-        is_investigating = False
         print("✅ AI đã điều tra Jenkins xong. Nhả cờ khóa.")
-
+        print("-" * 60)
+        release_llm_lock()
 async def run_metrics_investigation_wrapper(alert_name, alert_desc):
-    global is_metrics_investigating
+    await acquire_llm_lock(f"Điều tra Hạ tầng (Alert: {alert_name})")
     try:
         await run_metrics_investigation(alert_name, alert_desc)
     finally:
-        is_metrics_investigating = False
         print("✅ AI đã điều tra Hạ tầng xong. Nhả cờ khóa.")
-
+        print("-" * 60)
+        release_llm_lock()
 async def run_success_report_wrapper(job_name):
-    global is_reporting
+    await acquire_llm_lock(f"Báo cáo Deploy (Job: {job_name})")
     try:
         await run_success_report(job_name)
     finally:
-        is_reporting = False
-        print("✅ AI đã tổng hợp báo cáo Deploy xong. Nhả cờ khóa.")
-
+        print("✅ AI đã báo cáo Deploy xong. Nhả cờ khóa.")
+        print("-" * 60)
+        release_llm_lock()
 async def run_smart_cd_wrapper(tf_dir):
-    global is_cd_approving
+    await acquire_llm_lock(f"Thẩm định Smart CD ({tf_dir})")
     try: 
         await run_smart_cd_approval(tf_dir)
     finally: 
-        is_cd_approving = False
-        print("✅ AI đã thẩm định Deploy xong. Nhả cờ khóa.")
-
+        print("✅ AI đã thẩm định Smart CD xong. Nhả cờ khóa.")
+        print("-" * 60)
+        release_llm_lock()
 @app.post("/webhook")
 async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
-    global is_investigating, is_reporting, is_cd_approving
     data = await request.json()
     job_name = data.get("job_name", "weather-app-pipeline")
     status = data.get("status")
@@ -533,40 +625,24 @@ async def jenkins_webhook(request: Request, background_tasks: BackgroundTasks):
     print(f"\n📥 [JENKINS WEBHOOK] Nhận tín hiệu: Job '{job_name}' - Trạng thái: {status}")
 
     if status == "FAILURE":
-        if is_investigating:
-            print("🛑 AI đang bận điều tra CI/CD, bỏ qua Webhook bị spam!")
-            return {"message": "AI đang bận, bỏ qua."}
-            
-        print("🚨 Phát hiện lỗi Build! Đánh thức AI chạy ngầm...")
-        is_investigating = True
+        print("🚨 Phát hiện lỗi Build! Xếp lịch AI chạy ngầm...")
         background_tasks.add_task(run_investigation_wrapper, job_name)
-        return {"message": "AI Agent đang tiến hành điều tra lỗi Build!"}
+        return {"message": "AI Agent đang xếp lịch điều tra lỗi Build!"}
     
     elif status == "SUCCESS":
-        if is_reporting:
-            print("🛑 AI đang bận viết báo cáo, bỏ qua Webhook bị spam!")
-            return {"message": "AI đang bận, bỏ qua."}
-            
-        print("💚 Build thành công! Yêu cầu AI kiểm tra sức khỏe hệ thống sau Deploy...")
-        is_reporting = True
+        print("💚 Build thành công! Xếp lịch AI kiểm tra sức khỏe hệ thống sau Deploy...")
         background_tasks.add_task(run_success_report_wrapper, job_name)
-        return {"message": "AI Agent đang tổng hợp báo cáo sau khi Deploy thành công!"}
+        return {"message": "AI Agent đang xếp lịch tổng hợp báo cáo sau khi Deploy thành công!"}
     
     elif status == "PENDING_APPROVAL":
-        if is_cd_approving: 
-            print("🛑 AI đang bận thẩm định, bỏ qua Webhook bị spam!")
-            return {"message": "AI đang bận, bỏ qua."}
-        
-
-        is_cd_approving = True
+        print("🛑 Xếp lịch AI thẩm định Smart CD rủi ro Deploy...")
         background_tasks.add_task(run_smart_cd_wrapper, k8s_dir)
-        return {"message": "AI đang tiến hành thẩm định Smart CD rủi ro Deploy!"}
+        return {"message": "AI đang xếp lịch thẩm định Smart CD rủi ro Deploy!"}
     
     return {"message": "Trạng thái không xác định."}
 
 @app.post("/prometheus-webhook")
 async def prometheus_webhook(request: Request, background_tasks: BackgroundTasks):
-    global is_metrics_investigating
     try:
         data = await request.json()
         alerts = data.get("alerts", [])
@@ -581,13 +657,9 @@ async def prometheus_webhook(request: Request, background_tasks: BackgroundTasks
 
         if status == "firing":
             print(f"\n🔥 [PROMETHEUS WEBHOOK] Nhận cảnh báo: {alert_name} - {alert_desc}")
-            if is_metrics_investigating:
-                print("🛑 AI đang bận điều tra Hạ tầng, bỏ qua Webhook bị spam!")
-                return {"message": "AI đang bận."}
-                
-            is_metrics_investigating = True
+            print("🚨 Xếp lịch AI điều tra quá tải K3s...")
             background_tasks.add_task(run_metrics_investigation_wrapper, alert_name, alert_desc)
-            return {"message": "AI đang điều tra quá tải K3s!"}
+            return {"message": "AI đang xếp lịch điều tra quá tải K3s!"}
         else:
             print(f"\n💚 [PROMETHEUS WEBHOOK] Cảnh báo {alert_name} đã được giải quyết (resolved).")
             return {"message": "Hệ thống K3s đã xanh."}
@@ -595,10 +667,250 @@ async def prometheus_webhook(request: Request, background_tasks: BackgroundTasks
     except Exception as e:
         return {"message": f"Lỗi xử lý webhook: {str(e)}"}
 
+# ==========================================
+# 5. CHATBOT ENGINE
+# ==========================================
+async def run_chatbot(user_prompt: str):
+    await acquire_llm_lock("Tương tác người dùng (Chatbot)")
+    try:
+        server_params = StdioServerParameters(command="python", args=["main.py"])
+        async with intercepted_stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                
+                SYSTEM_PROMPT = """Bạn là AI SRE Chatbot. 
+Quy tắc:
+1. LUÔN LUÔN giao tiếp bằng TIẾNG VIỆT trong mọi tình huống. Bắt buộc dịch các phân tích log sang tiếng Việt. Trả lời ngắn gọn, trực tiếp.
+2. Nếu người dùng yêu cầu kiểm tra lỗi, đọc log, hoặc thực hiện hành động hệ thống, bạn BẮT BUỘC phải sử dụng một trong các Tool sau:
+Danh sách Tools khả dụng:
+- get_build_overview: {"job_name": "tên-job", "build_number": "Số nguyên (ví dụ: 53) hoặc 'lastBuild'. TUYỆT ĐỐI KHÔNG dùng 'lastBuild-1'"} (dùng để xem bảng tóm tắt trạng thái và thời gian của TẤT CẢ các stage trong build)
+- get_jenkins_logs: {"job_name": "tên-job", "build_number": "Số nguyên (ví dụ: 53) hoặc 'lastBuild'. TUYỆT ĐỐI KHÔNG dùng 'lastBuild-1'", "target_stage": "Tên Stage (Tùy chọn)"} (dùng để lấy chi tiết log Jenkins. Có thể lấy log của 1 stage cụ thể kể cả SUCCESS hoặc FAILED. Nếu không truyền target_stage, sẽ trả về toàn bộ log)
+- get_app_logs: {"namespace": "tên", "label_selector": "app=tên"} (dùng để xem log K8s pod)
+- check_system_health: {"namespace": "default"} (dùng để xem sức khỏe Pods)
+- fetch_metrics: {} (dùng để xem CPU, RAM)
+- list_directory: {"directory_path": "đường-dẫn"} 
+- read_project_file: {"file_path": "đường-dẫn-file"}
+- restart_pod: {"pod_name": "tên", "namespace": "tên"}
+- rollback: {"deployment_name": "tên", "namespace": "tên"}
+- scale_deployment: {"deployment_name": "tên", "replicas": số, "namespace": "tên"}
 
-if __name__ == "__main__":
-    new_webhook = setup_self_register_webhook()
+3. Nếu người dùng không nói rõ tên Job Jenkins, hãy mặc định dùng "weather-app-pipeline" hoặc hỏi lại.
+4. Luôn tuân thủ định dạng ReAct nếu cần gọi Tool:
+Thought: [Suy nghĩ]
+Action: [tên-tool]
+Action Input: [JSON]
+
+5. QUY TẮC THÉP: Nếu bạn đã dùng 'Action', TUYỆT ĐỐI KHÔNG dùng 'Final Answer' trong cùng một câu trả lời.
+6. Nếu Observation đã trả về chi tiết log của một Stage, hãy đọc kỹ nội dung đó để trả lời luôn, ĐỪNG gọi lại tool nữa.
+
+Chỉ khi muốn kết thúc và trả lời người dùng, bạn mới dùng:
+Final Answer: [Câu trả lời]
+"""
+                history = ""
+                max_steps = 10 
+                for step in range(max_steps):
+                    prompt = f"{SYSTEM_PROMPT}\n\nLịch sử:\n{history}\n\nNhiệm vụ: {user_prompt}\n\nBước tiếp theo là gì?"
+                    
+                    async def show_thinking():
+                        try:
+                            seconds = 0
+                            while True:
+                                await asyncio.sleep(15)
+                                seconds += 15
+                                print(f"⏳ (Đã đợi {seconds}s) AI vẫn đang suy nghĩ, vui lòng kiên nhẫn...")
+                        except asyncio.CancelledError:
+                            pass
+                            
+                    think_task = asyncio.create_task(show_thinking())
+                    try:
+                        response = await llm.ainvoke(prompt)
+                    finally:
+                        think_task.cancel()
+                    
+                    action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
+                    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
+                    
+                    if action_match and input_match:
+                        tool_name = action_match.group(1).strip()
+                        try:
+                            raw_json = re.sub(r'```json\s*|```', '', input_match.group(1).strip())
+                            tool_args = json.loads(raw_json)
+                            print(f"🛠️ Đang gọi Tool: [{tool_name}]...")
+                            tool_result = await session.call_tool(tool_name, arguments=tool_args)
+                            observation = tool_result.content[0].text
+                            if len(observation) > 10000: observation = "...[CẮT BỚT ĐẦU]...\n" + observation[-10000:]
+                            history += f"\nThought: {response}\nObservation: {observation}\n"
+                        except Exception as e:
+                            history += f"\nObservation: LỖI GỌI TOOL: {str(e)}\n"
+                        
+                        # Chống tràn bộ nhớ Context Window của LLM
+                        if len(history) > MAX_HISTORY_CHARS:
+                            history = "...[LỊCH SỬ CŨ ĐÃ BỊ XÓA BỚT ĐỂ CHỐNG TRÀN RAM]...\n" + history[-MAX_HISTORY_CHARS:]
+
+                    elif "Final Answer:" in response:
+                        answer = response.split("Final Answer:")[1].strip()
+                        print(f"🤖 Chatbot:\n{answer}\n")
+                        break
+                    else:
+                        print(f"🤖 Chatbot:\n{response}\n")
+                        break
+    except Exception as e:
+        print(f"❌ Lỗi Chatbot: {e}")
+    finally:
+        print("-" * 60)
+        release_llm_lock()
+
+# ==========================================
+# MAIN LOOP
+# ==========================================
+async def chat_loop():
+    await asyncio.sleep(2) # Chờ server khởi động
+    print("\n" + "="*40)
+    print("✨ CHATBOT CLI ĐÃ SẴN SÀNG ✨")
+    print("💡 Hướng dẫn thao tác:")
+    print("   - Nhấn [Alt + Enter] để xuống dòng khi gõ.")
+    print("   - Gõ 'exit' hoặc nhấn [Ctrl + C] 2 lần liên tiếp để thoát.")
+    print("   - Gõ yêu cầu của bạn và nhấn [Enter] để gửi.")
+    print("="*40 + "\n")
     
+    kb = KeyBindings()
+    
+    @kb.add("enter")
+    def _(event):
+        # Enter bình thường dùng để Gửi lệnh
+        event.current_buffer.validate_and_handle()
+
+    @kb.add("escape", "enter")
+    def _(event):
+        # Alt+Enter (hoặc Esc -> Enter) dùng để chèn dấu xuống dòng
+        event.current_buffer.insert_text("\n")
+        
+    global prompt_task, saved_prompt_text, cli_session
+    session = PromptSession(multiline=True, key_bindings=kb, erase_when_done=True)
+    cli_session = session
+    
+    while True:
+        try:
+            if llm_lock.locked():
+                # Nếu đang bị khóa, đợi cho đến khi rảnh
+                await llm_lock.acquire()
+                llm_lock.release()
+                
+            with patch_stdout():
+                prompt_task = asyncio.create_task(session.prompt_async("\nBạn: ", default=saved_prompt_text, handle_sigint=False))
+                user_input = await prompt_task
+                saved_prompt_text = ""
+                
+            # Khôi phục lá chắn bảo vệ vì prompt_toolkit đã xóa nó sau khi xong
+            try:
+                asyncio.get_running_loop().add_signal_handler(signal.SIGINT, global_sigint_handler)
+            except NotImplementedError:
+                pass
+                
+            if not user_input.strip():
+                continue
+            
+            # In lại câu hỏi của người dùng ra màn hình vì erase_when_done đã xóa nó
+            print(f"\nBạn: {user_input.strip()}")
+            
+            if user_input.strip().lower() in ['exit', 'quit']:
+                print("👋 Tạm biệt! Đang dọn dẹp hệ thống...")
+                try:
+                    ngrok.kill()
+                except:
+                    pass
+                os._exit(0)
+                
+            await run_chatbot(user_input)
+        except (KeyboardInterrupt, EOFError):
+            print("\n👋 Tạm biệt! Đang thoát chương trình...")
+            try:
+                ngrok.kill()
+            except:
+                pass
+            os._exit(0)
+            
+        except asyncio.CancelledError:
+            global cancelled_by_user
+            if cancelled_by_user:
+                # User bấm Ctrl+C lần 1
+                cancelled_by_user = False
+                saved_prompt_text = ""
+            else:
+                # Prompt bị hủy bởi luồng chạy ngầm (Webhook) để tạm ẩn, sẽ tự động mở lại sau
+                pass
+            continue
+        except Exception as e:
+            print(f"Lỗi: {e}")
+
+async def tail_mcp_log():
+    """Đọc file mcp_server.log liên tục và in ra màn hình an toàn qua patch_stdout"""
+    while not os.path.exists("mcp_server.log"):
+        await asyncio.sleep(0.5)
+        
+    try:
+        with open("mcp_server.log", "r") as f:
+            # Bắt đầu đọc từ cuối file để chỉ lấy log mới
+            f.seek(0, os.SEEK_END)
+            while True:
+                line = f.readline()
+                if not line:
+                    await asyncio.sleep(0.2)
+                    continue
+                
+                # Bỏ qua các log rác quá dài hoặc rỗng
+                if line.strip():
+                    print(f"⚙️ [MCP] {line.strip()}")
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"⚠️ Lỗi đọc log MCP: {e}")
+
+import time
+
+cancelled_by_user = False
+ctrl_c_count = 0
+last_ctrl_c_time = 0
+
+def global_sigint_handler():
+    global prompt_task, cancelled_by_user, ctrl_c_count, last_ctrl_c_time
+    
+    current_time = time.time()
+    if current_time - last_ctrl_c_time > 3:
+        ctrl_c_count = 0
+    
+    last_ctrl_c_time = current_time
+    ctrl_c_count += 1
+    
+    if ctrl_c_count >= 2:
+        print("\n👋 Tạm biệt! Đang thoát chương trình...")
+        try:
+            ngrok.kill()
+        except:
+            pass
+        os._exit(0)
+        
+    # Khi AI đang chạy
+    if llm_lock.locked():
+        print("\n[Hệ thống] 🛡️ AI đang chạy. Nhấn Ctrl+C lần nữa trong 3s để BẮT BUỘC thoát.")
+    else:
+        print("\n[Hệ thống] Nhấn Ctrl+C lần nữa trong 3s để thoát chương trình.")
+        cancelled_by_user = True
+        if prompt_task and not prompt_task.done():
+            prompt_task.cancel()
+
+async def main():
+    loop = asyncio.get_running_loop()
+    try:
+        loop.add_signal_handler(signal.SIGINT, global_sigint_handler)
+    except NotImplementedError:
+        # Bỏ qua nếu chạy trên Windows (add_signal_handler không hỗ trợ Windows)
+        pass
+        
+    # Khởi chạy luồng theo dõi log MCP ngầm
+    log_task = asyncio.create_task(tail_mcp_log())
+    
+    new_webhook = setup_self_register_webhook()
     if new_webhook:
         print(f"\n✨ AGENT ĐÃ SẴN SÀNG TẠI: {new_webhook}")
     else:
@@ -607,4 +919,26 @@ if __name__ == "__main__":
     print("🚀 AIOps Server đang lắng nghe trên cổng 5000...")
     print("👉 Endpoint 1 (Jenkins): /webhook")
     print("👉 Endpoint 2 (Prometheus): /prometheus-webhook")
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    
+    # Khởi chạy Uvicorn trên một luồng hoàn toàn độc lập (Thread)
+    # Điều này giúp Uvicorn có Event Loop riêng và hoàn toàn miễn nhiễm với Ctrl+C (vốn chỉ gửi vào Main Thread)
+    def run_uvicorn():
+        config = uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="warning")
+        server = uvicorn.Server(config)
+        import contextlib
+        @contextlib.contextmanager
+        def noop_capture_signals():
+            yield
+        server.capture_signals = noop_capture_signals
+        server.run()
+        
+    threading.Thread(target=run_uvicorn, daemon=True).start()
+    
+    # Khởi chạy Chatbot CLI
+    await chat_loop()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nĐã thoát Chatbot.")

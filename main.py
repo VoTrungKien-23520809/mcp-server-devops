@@ -14,9 +14,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 2. Bật Radar theo dõi
+import sys
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stderr
 )
 logger = logging.getLogger("devops_mcp_server")
 
@@ -83,31 +85,83 @@ def ping_server() -> str:
     logger.info("Ping tool được gọi.")
     return "Pong! The DevOps MCP Server is fully operational and secured."
 
-# Tool 2: Fetch Jenkins Logs (Đã được buff sức mạnh)
+# Tool 2.1: Get Build Overview
 @mcp.tool()
-def get_jenkins_logs(job_name: str, build_number: str = "lastBuild") -> str:
-    """Fetch the console log of a Jenkins build for error analysis."""
-    logger.info(f"Đang kéo log Jenkins cho job: {job_name}, build: {build_number}")
+def get_build_overview(job_name: str, build_number: str = "lastBuild") -> str:
+    """Get an overview of all stages in a Jenkins build, including their status and duration."""
+    logger.info(f"Đang kéo tổng quan build cho job: {job_name}, build: {build_number}")
     
     if not JENKINS_URL or not JENKINS_USER or not JENKINS_TOKEN:
         logger.error("THẤT BẠI: Thiếu biến môi trường Jenkins trong file .env")
         return "Error: Thiếu cấu hình Jenkins URL, User hoặc Token trong file .env."
 
     base_url = JENKINS_URL.rstrip('/')
-    url = f"{base_url}/job/{job_name}/{build_number}/consoleText"
-
+    wfapi_url = f"{base_url}/job/{job_name}/{build_number}/wfapi/describe"
+    
     try:
-        # Dùng session có retry thay vì requests.get thông thường
-        response = session.get(url, auth=(JENKINS_USER, JENKINS_TOKEN), timeout=10)
+        response = session.get(wfapi_url, auth=(JENKINS_USER, JENKINS_TOKEN), timeout=10)
         response.raise_for_status()
         
-        logs = response.text
-        if len(logs) > 5000:
-            logger.warning("Log quá dài, đang tiến hành cắt bớt để bảo vệ não AI...")
-            return "...[LOG TRUNCATED]...\n" + logs[-5000:]
+        stages = response.json().get("stages", [])
+        if not stages:
+            return "Không tìm thấy stage nào trong build này."
+            
+        overview = f"### Tổng quan Build: {job_name} #{build_number}\n\n"
+        overview += "| Tên Stage | Trạng thái | Thời gian chạy (giây) |\n"
+        overview += "|---|---|---|\n"
         
-        logger.info("✅ Kéo log Jenkins thành công!")
-        return logs
+        for stage in stages:
+            name = stage.get("name", "Unknown")
+            status = stage.get("status", "UNKNOWN")
+            duration_ms = stage.get("durationMillis", 0)
+            duration_sec = duration_ms / 1000.0
+            overview += f"| {name} | {status} | {duration_sec:.2f}s |\n"
+            
+        return overview
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Lỗi khi gọi API wfapi: {str(e)}")
+        return f"Error fetching build overview: {str(e)}"
+
+# Tool 2.2: Fetch Jenkins Logs
+@mcp.tool()
+def get_jenkins_logs(job_name: str, build_number: str = "lastBuild", target_stage: str = None) -> str:
+    """Fetch the log of a Jenkins build. If target_stage is provided, returns the log for only that stage. If not, returns the full log."""
+    logger.info(f"Đang kéo log Jenkins cho job: {job_name}, build: {build_number}, target_stage: {target_stage}")
+    
+    if not JENKINS_URL or not JENKINS_USER or not JENKINS_TOKEN:
+        logger.error("THẤT BẠI: Thiếu biến môi trường Jenkins trong file .env")
+        return "Error: Thiếu cấu hình Jenkins URL, User hoặc Token trong file .env."
+
+    base_url = JENKINS_URL.rstrip('/')
+    raw_url = f"{base_url}/job/{job_name}/{build_number}/consoleText"
+    
+    try:
+        raw_res = session.get(raw_url, auth=(JENKINS_USER, JENKINS_TOKEN), timeout=10)
+        raw_res.raise_for_status()
+        raw_logs = raw_res.text
+        
+        if target_stage:
+            # Dùng regex cắt đúng đoạn của target_stage
+            import re
+            pattern = re.compile(rf"\[Pipeline\] \{{ \({re.escape(target_stage)}\)(.*?)(?=\[Pipeline\] stage|Finished:)", re.DOTALL | re.IGNORECASE)
+            match = pattern.search(raw_logs)
+            
+            if match:
+                stage_log = match.group(1).strip()
+                if len(stage_log) > 8000:
+                    stage_log = "...[LOG TRUNCATED]...\n" + stage_log[-8000:]
+                return f"--- KẾT QUẢ TỪ PIPELINE STAGE: {target_stage} ---\n{stage_log}"
+            else:
+                logger.warning(f"Không thể regex cắt log cho Stage '{target_stage}'. Trả về toàn bộ log...")
+                # Fallback: Trả về toàn bộ log nếu không tìm thấy stage
+        
+        # Nếu không có target_stage hoặc fallback, trả về raw log
+        if len(raw_logs) > 8000:
+            logger.warning("Log quá dài, đang tiến hành cắt bớt để bảo vệ não AI...")
+            return "...[LOG TRUNCATED]...\n" + raw_logs[-8000:]
+        
+        logger.info("✅ Kéo log Jenkins thành công (raw log)!")
+        return raw_logs
         
     except requests.exceptions.RequestException as e:
         logger.error(f"Lỗi khi gọi API Jenkins: {str(e)}")
