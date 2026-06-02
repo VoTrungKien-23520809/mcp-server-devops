@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AI SRE Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #30363d;
+    --accent:    #58a6ff;
+    --accent2:   #3fb950;
+    --danger:    #f85149;
+    --warning:   #e3b341;
+    --muted:     #8b949e;
+    --text:      #e6edf3;
+    --user-bg:   #1f3a5f;
+    --ai-bg:     #1a2332;
+    --code-bg:   #0d1117;
+    --scroll:    #30363d;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+
+  .header-title { flex:1; }
+  .header-title h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: .3px;
+  }
+  .header-title p {
+    font-size: 11px; color: var(--muted); margin-top: 1px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    background: var(--accent2);
+    border-radius: 50%;
+    box-shadow: 0 0 6px var(--accent2);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity:1; }
+    50% { opacity:.4; }
+  }
+
+  /* ── Main layout ── */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 220px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 16px 12px;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .sidebar-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 0 8px;
+    margin-bottom: 4px;
+  }
+
+  .suggestion-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    padding: 8px 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: all .15s;
+    font-family: 'Inter', sans-serif;
+    line-height: 1.4;
+  }
+  .suggestion-btn:hover {
+    background: var(--border);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .sidebar-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 8px 0;
+  }
+
+  .clear-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--danger);
+    font-size: 12px;
+    padding: 8px 10px;
+    cursor: pointer;
+    text-align: left;
+    transition: all .15s;
+    font-family: 'Inter', sans-serif;
+    margin-top: auto;
+  }
+  .clear-btn:hover { background: rgba(248,81,73,.1); border-color: var(--danger); }
+
+  /* ── Chat area ── */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-behavior: smooth;
+  }
+
+  #messages::-webkit-scrollbar { width: 6px; }
+  #messages::-webkit-scrollbar-track { background: transparent; }
+  #messages::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 3px; }
+
+  /* ── Welcome screen ── */
+  .welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 12px;
+    opacity: .7;
+    padding: 40px;
+    text-align: center;
+  }
+  .welcome .big-icon { font-size: 48px; }
+  .welcome h2 { font-size: 20px; font-weight: 600; }
+  .welcome p { font-size: 13px; color: var(--muted); line-height: 1.6; max-width: 400px; }
+
+  /* ── Message bubbles ── */
+  .msg {
+    display: flex;
+    gap: 10px;
+    max-width: 820px;
+    width: 100%;
+  }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.ai   { align-self: flex-start; }
+
+  .avatar {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .msg.user .avatar { background: var(--user-bg); }
+  .msg.ai   .avatar { background: linear-gradient(135deg, #1f3a5f, #1a3a2a); }
+
+  .bubble {
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 13.5px;
+    line-height: 1.65;
+    max-width: calc(100% - 42px);
+    word-break: break-word;
+  }
+  .msg.user .bubble {
+    background: var(--user-bg);
+    border: 1px solid rgba(88,166,255,.2);
+    border-top-right-radius: 3px;
+  }
+  .msg.ai .bubble {
+    background: var(--ai-bg);
+    border: 1px solid var(--border);
+    border-top-left-radius: 3px;
+  }
+
+  /* Markdown-like formatting inside bubbles */
+  .bubble h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 10px 0 4px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .bubble h4:first-child { margin-top: 0; }
+  .bubble p { margin-bottom: 6px; }
+  .bubble p:last-child { margin-bottom: 0; }
+  .bubble ul, .bubble ol {
+    padding-left: 18px; margin: 4px 0;
+  }
+  .bubble li { margin-bottom: 3px; }
+  .bubble code {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--warning);
+  }
+  .bubble pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    margin: 8px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .bubble pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text);
+  }
+  .bubble strong { color: var(--accent2); font-weight: 600; }
+  .bubble em { color: var(--warning); font-style: normal; }
+
+  /* Status badges */
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-right: 4px;
+  }
+  .badge-green { background: rgba(63,185,80,.15); color: var(--accent2); border: 1px solid rgba(63,185,80,.3); }
+  .badge-red   { background: rgba(248,81,73,.15); color: var(--danger); border: 1px solid rgba(248,81,73,.3); }
+  .badge-blue  { background: rgba(88,166,255,.15); color: var(--accent); border: 1px solid rgba(88,166,255,.3); }
+
+  /* Thinking indicator */
+  .thinking {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    max-width: 820px;
+  }
+  .thinking .avatar { background: linear-gradient(135deg, #1f3a5f, #1a3a2a); }
+  .dots {
+    display: flex; gap: 5px; padding: 14px 16px;
+    background: var(--ai-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px; border-top-left-radius: 3px;
+  }
+  .dot {
+    width: 7px; height: 7px;
+    background: var(--muted);
+    border-radius: 50%;
+    animation: bounce .9s ease-in-out infinite;
+  }
+  .dot:nth-child(2) { animation-delay: .15s; }
+  .dot:nth-child(3) { animation-delay: .30s; }
+  @keyframes bounce {
+    0%,80%,100% { transform: translateY(0); }
+    40% { transform: translateY(-6px); background: var(--accent); }
+  }
+
+  /* ── Input bar ── */
+  .input-bar {
+    padding: 16px 24px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-shrink: 0;
+  }
+
+  #input-box {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 13.5px;
+    resize: none;
+    min-height: 44px;
+    max-height: 140px;
+    line-height: 1.5;
+    outline: none;
+    transition: border-color .2s;
+    overflow-y: auto;
+  }
+  #input-box:focus { border-color: var(--accent); }
+  #input-box::placeholder { color: var(--muted); }
+
+  #send-btn {
+    width: 44px; height: 44px;
+    background: var(--accent);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    transition: all .15s;
+    flex-shrink: 0;
+    color: #0d1117;
+  }
+  #send-btn:hover { background: #79c0ff; transform: scale(1.05); }
+  #send-btn:disabled { background: var(--border); cursor: not-allowed; transform: none; }
+
+  .input-hint {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    padding: 0 24px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">🤖</div>
+  <div class="header-title">
+    <h1>AI SRE Assistant</h1>
+    <p>Powered by Qwen 14B · MCP Tools · K3s + Jenkins + Prometheus</p>
+  </div>
+  <div class="status-dot" title="Online"></div>
+</header>
+
+<div class="main">
+
+  <!-- Sidebar gợi ý -->
+  <aside class="sidebar">
+    <div class="sidebar-label">Câu hỏi mẫu</div>
+
+    <button class="suggestion-btn" onclick="fillInput('Lấy log Jenkins job weather-app-pipeline ngày 1/5/2025')">
+      📋 Log Jenkins ngày 1/5
+    </button>
+    <button class="suggestion-btn" onclick="fillInput('Kiểm tra trạng thái tất cả Pod trong namespace default')">
+      🩺 Kiểm tra Pod
+    </button>
+    <button class="suggestion-btn" onclick="fillInput('CPU và RAM hiện tại đang bao nhiêu %?')">
+      📊 CPU & RAM hiện tại
+    </button>
+    <button class="suggestion-btn" onclick="fillInput('Lấy log ứng dụng meteo-hist trong 1 giờ gần đây')">
+      📄 App log 1h gần đây
+    </button>
+    <button class="suggestion-btn" onclick="fillInput('Lấy log app meteo-hist ngày 15/4/2025')">
+      🗓️ App log theo ngày
+    </button>
+    <button class="suggestion-btn" onclick="fillInput('Danh sách các Node trong cluster K3s')">
+      🖥️ Xem Node cluster
+    </button>
+    <button class="suggestion-btn" onclick="fillInput('Đọc file weather-app/Dockerfile')">
+      📁 Đọc Dockerfile
+    </button>
+    <button class="suggestion-btn" onclick="fillInput('Rollback deployment meteo-hist-deployment về bản trước')">
+      ⏪ Rollback deployment
+    </button>
+
+    <div class="sidebar-divider"></div>
+
+    <button class="clear-btn" onclick="clearChat()">🗑️ Xóa hội thoại</button>
+  </aside>
+
+  <!-- Vùng chat -->
+  <div class="chat-area">
+    <div id="messages">
+      <div class="welcome" id="welcome-screen">
+        <div class="big-icon">🛡️</div>
+        <h2>AI SRE Assistant</h2>
+        <p>Hỏi bất cứ điều gì về hệ thống — log Jenkins theo ngày, trạng thái K3s, chỉ số Prometheus, hay yêu cầu rollback / restart.</p>
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <textarea
+        id="input-box"
+        placeholder="Hỏi AI... (Shift+Enter để xuống dòng, Enter để gửi)"
+        rows="1"
+      ></textarea>
+      <button id="send-btn" onclick="sendMessage()" title="Gửi">➤</button>
+    </div>
+    <div class="input-hint">Enter để gửi · Shift+Enter xuống dòng</div>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────
+let chatHistory = [];
+let isLoading = false;
+
+// ── Helpers ──────────────────────────────────────────────────────
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/**
+ * Chuyển đổi markdown đơn giản sang HTML:
+ * #### heading, **bold**, `code`, ```block```, - list
+ */
+function renderMarkdown(text) {
+  let html = escapeHtml(text);
+
+  // Code block
+  html = html.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) =>
+    `<pre><code>${code.trim()}</code></pre>`
+  );
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // #### heading
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+
+  // **bold**
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  // *italic* / _italic_
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Status badges tự động
+  html = html.replace(/🟢 TỐT/g, '<span class="badge badge-green">🟢 TỐT</span>');
+  html = html.replace(/🔴 LỖI/g, '<span class="badge badge-red">🔴 LỖI</span>');
+  html = html.replace(/🟢 APPROVE/g, '<span class="badge badge-green">🟢 APPROVE</span>');
+  html = html.replace(/🔴 REJECT/g, '<span class="badge badge-red">🔴 REJECT</span>');
+
+  // Unordered list
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+
+  // Paragraph (xuống dòng kép)
+  html = html.replace(/\n{2,}/g, '</p><p>');
+  html = `<p>${html}</p>`;
+
+  // Dọn thẻ <p> rỗng quanh block-level tags
+  html = html.replace(/<p>(<h4>|<ul>|<pre>)/g, '$1');
+  html = html.replace(/(<\/h4>|<\/ul>|<\/pre>)<\/p>/g, '$1');
+  html = html.replace(/<p><\/p>/g, '');
+  html = html.replace(/\n/g, '<br/>');
+
+  return html;
+}
+
+function scrollToBottom() {
+  const el = document.getElementById('messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function hideWelcome() {
+  const w = document.getElementById('welcome-screen');
+  if (w) w.remove();
+}
+
+// ── Render tin nhắn ──────────────────────────────────────────────
+function appendMessage(role, content) {
+  hideWelcome();
+  const container = document.getElementById('messages');
+
+  const isUser = role === 'user';
+  const msgDiv = document.createElement('div');
+  msgDiv.className = `msg ${isUser ? 'user' : 'ai'}`;
+
+  const avatarDiv = document.createElement('div');
+  avatarDiv.className = 'avatar';
+  avatarDiv.textContent = isUser ? '👤' : '🤖';
+
+  const bubbleDiv = document.createElement('div');
+  bubbleDiv.className = 'bubble';
+  bubbleDiv.innerHTML = isUser ? escapeHtml(content) : renderMarkdown(content);
+
+  msgDiv.appendChild(avatarDiv);
+  msgDiv.appendChild(bubbleDiv);
+  container.appendChild(msgDiv);
+  scrollToBottom();
+  return bubbleDiv;
+}
+
+// ── Thinking indicator ───────────────────────────────────────────
+function showThinking() {
+  hideWelcome();
+  const container = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'thinking';
+  div.id = 'thinking-indicator';
+  div.innerHTML = `
+    <div class="avatar">🤖</div>
+    <div class="dots">
+      <div class="dot"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+    </div>`;
+  container.appendChild(div);
+  scrollToBottom();
+}
+
+function hideThinking() {
+  const el = document.getElementById('thinking-indicator');
+  if (el) el.remove();
+}
+
+// ── Gửi tin nhắn ────────────────────────────────────────────────
+async function sendMessage() {
+  if (isLoading) return;
+
+  const inputEl = document.getElementById('input-box');
+  const message = inputEl.value.trim();
+  if (!message) return;
+
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  isLoading = true;
+  document.getElementById('send-btn').disabled = true;
+
+  // Hiện tin nhắn người dùng
+  appendMessage('user', message);
+
+  // Thêm vào history
+  chatHistory.push({ role: 'user', content: message });
+
+  // Hiện loading
+  showThinking();
+
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: message,
+        history: chatHistory
+      })
+    });
+
+    const data = await res.json();
+    hideThinking();
+
+    const aiReply = data.response || 'Không có phản hồi từ AI.';
+    appendMessage('ai', aiReply);
+
+    // Thêm AI reply vào history
+    chatHistory.push({ role: 'assistant', content: aiReply });
+
+    // Giới hạn history để tránh tràn context
+    if (chatHistory.length > 20) {
+      chatHistory = chatHistory.slice(-20);
+    }
+
+  } catch (err) {
+    hideThinking();
+    appendMessage('ai', `❌ Không thể kết nối tới AI Server. Lỗi: ${err.message}`);
+  }
+
+  isLoading = false;
+  document.getElementById('send-btn').disabled = false;
+  inputEl.focus();
+}
+
+// ── Sidebar helpers ──────────────────────────────────────────────
+function fillInput(text) {
+  const el = document.getElementById('input-box');
+  el.value = text;
+  el.focus();
+  autoResize(el);
+}
+
+function clearChat() {
+  chatHistory = [];
+  const container = document.getElementById('messages');
+  container.innerHTML = `
+    <div class="welcome" id="welcome-screen">
+      <div class="big-icon">🛡️</div>
+      <h2>AI SRE Assistant</h2>
+      <p>Hỏi bất cứ điều gì về hệ thống — log Jenkins theo ngày, trạng thái K3s, chỉ số Prometheus, hay yêu cầu rollback / restart.</p>
+    </div>`;
+}
+
+// ── Auto-resize textarea ─────────────────────────────────────────
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+}
+
+// ── Keyboard shortcut ────────────────────────────────────────────
+document.getElementById('input-box').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+
+document.getElementById('input-box').addEventListener('input', function() {
+  autoResize(this);
+});
+</script>
+</body>
+</html>
