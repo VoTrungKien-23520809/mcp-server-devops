@@ -125,46 +125,136 @@ def get_build_overview(job_name: str, build_number: str = "lastBuild") -> str:
 # Tool 2.2: Fetch Jenkins Logs
 @mcp.tool()
 def get_jenkins_logs(job_name: str, build_number: str = "lastBuild", target_stage: str = None) -> str:
-    """Fetch the log of a Jenkins build. If target_stage is provided, returns the log for only that stage. If not, returns the full log."""
-    logger.info(f"Đang kéo log Jenkins cho job: {job_name}, build: {build_number}, target_stage: {target_stage}")
-    
+    """
+    Lấy log Jenkins build. Nếu target_stage được cung cấp, trả về log tập trung vào stage đó.
+    Chiến lược 3 lớp:
+      1. wfapi node-log API (chính xác nhất, theo từng step bên trong stage)
+      2. Regex trên raw console log (dự phòng nếu wfapi không hỗ trợ)
+      3. Raw log toàn bộ, CẮT TỪ ĐẦU (không cắt đuôi để tránh mất error message)
+    """
+    logger.info(f"Kéo log: job={job_name}, build={build_number}, stage={target_stage}")
+
     if not JENKINS_URL or not JENKINS_USER or not JENKINS_TOKEN:
-        logger.error("THẤT BẠI: Thiếu biến môi trường Jenkins trong file .env")
-        return "Error: Thiếu cấu hình Jenkins URL, User hoặc Token trong file .env."
+        return "Error: Thiếu cấu hình Jenkins URL/User/Token trong .env."
 
     base_url = JENKINS_URL.rstrip('/')
-    raw_url = f"{base_url}/job/{job_name}/{build_number}/consoleText"
-    
+    auth = (JENKINS_USER, JENKINS_TOKEN)
+    MAX_LOG_CHARS = 8000
+
+    # ============================================================
+    # LAYER 1: Jenkins Pipeline wfapi — Lấy log chính xác theo node
+    # Endpoint chính xác: GET /execution/node/{node_id}/wfapi/log
+    # trả về JSON: { "nodeId": "...", "text": "...", "hasMore": bool }
+    # ============================================================
+    if target_stage:
+        try:
+            wfapi_url = f"{base_url}/job/{job_name}/{build_number}/wfapi/describe"
+            stages = session.get(wfapi_url, auth=auth, timeout=10).json().get("stages", [])
+
+            # Tìm stage: ưu tiên exact match, fallback substring (case-insensitive)
+            target_lower = target_stage.strip().lower()
+            matched_stage = None
+            for s in stages:
+                if s.get("name", "").strip().lower() == target_lower:
+                    matched_stage = s
+                    break
+            if not matched_stage:
+                for s in stages:
+                    if target_lower in s.get("name", "").strip().lower():
+                        matched_stage = s
+                        break
+
+            if matched_stage:
+                stage_id   = matched_stage["id"]
+                stage_name = matched_stage.get("name", target_stage)
+                stage_status = matched_stage.get("status", "UNKNOWN")
+
+                # Lấy danh sách các step (stageFlowNodes) bên trong stage
+                node_desc_url = f"{base_url}/job/{job_name}/{build_number}/execution/node/{stage_id}/wfapi/describe"
+                flow_nodes = session.get(node_desc_url, auth=auth, timeout=10).json().get("stageFlowNodes", [])
+
+                if flow_nodes:
+                    parts = [f"=== LOG STAGE: '{stage_name}' | Status: {stage_status} ==="]
+                    total_chars = len(parts[0])
+
+                    for node in flow_nodes:
+                        node_id     = node.get("id")
+                        node_name   = node.get("name", "Step")
+                        node_status = node.get("status", "")
+                        log_href    = node.get("_links", {}).get("log", {}).get("href", "")
+                        if not log_href:
+                            continue
+
+                        log_url = f"{base_url}{log_href}" if log_href.startswith("/") else log_href
+                        node_log_json = session.get(log_url, auth=auth, timeout=10).json()
+                        node_text = node_log_json.get("text", "").strip()
+
+                        if not node_text:
+                            continue
+
+                        header = f"\n--- [{node_status}] {node_name} (node {node_id}) ---\n"
+                        chunk  = header + node_text
+
+                        # Dừng lại khi sắp tràn ngưỡng ký tự, ưu tiên giữ phần đầu (chứa lỗi)
+                        if total_chars + len(chunk) > MAX_LOG_CHARS:
+                            remaining = MAX_LOG_CHARS - total_chars
+                            if remaining > len(header) + 100:
+                                parts.append(chunk[:remaining] + "\n...[CẮT BỚT]...")
+                            parts.append("\n⚠️ Log đã đạt giới hạn. Các step sau bị bỏ qua.")
+                            break
+
+                        parts.append(chunk)
+                        total_chars += len(chunk)
+
+                    result = "\n".join(parts)
+                    logger.info(f"✅ Layer 1 thành công: stage='{stage_name}', {total_chars} ký tự.")
+                    return result
+                else:
+                    logger.warning(f"Stage '{stage_name}' không có stageFlowNodes → sang Layer 2.")
+            else:
+                logger.warning(f"Không tìm thấy stage '{target_stage}' trong wfapi → sang Layer 2.")
+
+        except Exception as e:
+            logger.warning(f"Layer 1 thất bại ({e}) → sang Layer 2.")
+
+    # ============================================================
+    # LAYER 2: Regex cắt đoạn stage từ raw console log
+    # Tìm vị trí BẮT ĐẦU của stage và lấy từ đó, KHÔNG cắt từ đuôi
+    # ============================================================
     try:
-        raw_res = session.get(raw_url, auth=(JENKINS_USER, JENKINS_TOKEN), timeout=10)
-        raw_res.raise_for_status()
-        raw_logs = raw_res.text
-        
+        raw_url  = f"{base_url}/job/{job_name}/{build_number}/consoleText"
+        raw_logs = session.get(raw_url, auth=auth, timeout=15).text
+
         if target_stage:
-            # Dùng regex cắt đúng đoạn của target_stage
-            import re
-            pattern = re.compile(rf"\[Pipeline\] \{{ \({re.escape(target_stage)}\)(.*?)(?=\[Pipeline\] stage|Finished:)", re.DOTALL | re.IGNORECASE)
+            pattern = re.compile(
+                rf"\[Pipeline\] \{{ \({re.escape(target_stage)}\)(.*?)(?=\[Pipeline\] \{{ \(|\Z)",
+                re.DOTALL | re.IGNORECASE
+            )
             match = pattern.search(raw_logs)
-            
             if match:
                 stage_log = match.group(1).strip()
-                if len(stage_log) > 8000:
-                    stage_log = "...[LOG TRUNCATED]...\n" + stage_log[-8000:]
-                return f"--- KẾT QUẢ TỪ PIPELINE STAGE: {target_stage} ---\n{stage_log}"
+                if len(stage_log) > MAX_LOG_CHARS:
+                    # Cắt từ ĐẦU, không cắt đuôi
+                    stage_log = stage_log[:MAX_LOG_CHARS] + "\n...[CẮT BỚT - phần cuối stage bị lược bỏ]..."
+                logger.info(f"✅ Layer 2 thành công: stage='{target_stage}' qua regex.")
+                return f"--- LOG STAGE (regex): {target_stage} ---\n{stage_log}"
             else:
-                logger.warning(f"Không thể regex cắt log cho Stage '{target_stage}'. Trả về toàn bộ log...")
-                # Fallback: Trả về toàn bộ log nếu không tìm thấy stage
-        
-        # Nếu không có target_stage hoặc fallback, trả về raw log
-        if len(raw_logs) > 8000:
-            logger.warning("Log quá dài, đang tiến hành cắt bớt để bảo vệ não AI...")
-            return "...[LOG TRUNCATED]...\n" + raw_logs[-8000:]
-        
-        logger.info("✅ Kéo log Jenkins thành công (raw log)!")
+                logger.warning(f"Layer 2 regex không tìm thấy stage '{target_stage}' → trả về raw log.")
+
+        # ============================================================
+        # LAYER 3: Trả về raw log, luôn cắt từ ĐẦU (không cắt đuôi)
+        # Lý do: error message thường xuất hiện NGAY ĐẦU stack trace,
+        # cắt từ đuôi sẽ giữ lại phần cleanup/footer vô nghĩa.
+        # ============================================================
+        if len(raw_logs) > MAX_LOG_CHARS:
+            logger.warning("Layer 3: Raw log quá dài, cắt từ đầu để bảo toàn error message.")
+            return raw_logs[:MAX_LOG_CHARS] + "\n...[CẮT BỚT - phần sau bị lược bỏ để bảo toàn thông tin lỗi]..."
+
+        logger.info("✅ Layer 3: Trả về toàn bộ raw log.")
         return raw_logs
-        
+
     except requests.exceptions.RequestException as e:
-        logger.error(f"Lỗi khi gọi API Jenkins: {str(e)}")
+        logger.error(f"Lỗi kéo log Jenkins: {e}")
         return f"Error fetching logs from Jenkins: {str(e)}"
 
 # Tool 3: Read Terraform Plan
@@ -342,24 +432,91 @@ def list_directory(directory_path: str = ".") -> str:
     except Exception as e:
         return f"❌ Không thể đọc thư mục {directory_path}: {str(e)}"
 
-# Tool 10: AI dùng cái này để đọc nội dung file code/config (như lệnh 'cat')
+# Tool 10: AI dùng cái này để đọc nội dung file code/config (như lệnh 'cat -n')
 @mcp.tool()
-def read_project_file(file_path: str) -> str:
-    """Read the content of a file (e.g., Dockerfile, Jenkinsfile, .py) to analyze code or configuration."""
-    logger.info(f"📖 AI đang đọc file: {file_path}")
+def read_project_file(file_path: str, start_line: int = 1, end_line: int = 0) -> str:
+    """
+    Đọc nội dung một file trong project, có đánh số dòng để AI biết chính xác vị trí cần sửa.
+    - start_line: Dòng bắt đầu đọc (mặc định: 1 = đầu file).
+    - end_line: Dòng kết thúc (mặc định: 0 = đọc đến cuối file).
+    Ví dụ: read_project_file('weather-app/Dockerfile') hoặc read_project_file('app.py', 10, 50)
+    """
+    logger.info(f"📖 AI đang đọc file: {file_path} (dòng {start_line}-{end_line or 'EOF'})")
     try:
         safe_path = os.path.abspath(file_path)
-        # Khóa an toàn: Chỉ cho phép đọc trong thư mục dự án
         if not safe_path.startswith(os.getcwd()):
             return "❌ Lỗi bảo mật: Không được phép đọc file ngoài thư mục dự án."
 
         with open(safe_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        return f"--- NỘI DUNG FILE '{file_path}' ---\n{content}"
+            all_lines = f.readlines()
+
+        total_lines = len(all_lines)
+        s = max(1, start_line) - 1          # convert to 0-indexed
+        e = total_lines if end_line <= 0 else min(end_line, total_lines)
+        selected = all_lines[s:e]
+
+        # Đánh số dòng để AI biết chính xác dòng nào cần sửa
+        numbered = "".join(f"{s + i + 1:4d} | {line}" for i, line in enumerate(selected))
+
+        MAX_CHARS = 6000
+        if len(numbered) > MAX_CHARS:
+            numbered = numbered[:MAX_CHARS] + f"\n... [CẮT BỚT - file có {total_lines} dòng, hãy dùng start_line/end_line để đọc phần tiếp]"
+
+        return (
+            f"--- FILE: '{file_path}' | Tổng {total_lines} dòng | Đang xem dòng {s+1}-{s+len(selected)} ---\n"
+            f"{numbered}"
+        )
     except FileNotFoundError:
         return f"❌ Lỗi: Không tìm thấy file '{file_path}'"
     except Exception as e:
         return f"❌ Lỗi khi đọc file {file_path}: {str(e)}"
+
+# Tool 10b: AI dùng tool này để tìm kiếm từ khóa trong file (như lệnh 'grep')
+@mcp.tool()
+def search_in_file(file_path: str, keyword: str, context_lines: int = 5) -> str:
+    """
+    Tìm kiếm một từ khóa/chuỗi lỗi trong một file và trả về các dòng chứa từ khóa đó
+    cùng với (context_lines) dòng xung quanh để AI hiểu ngữ cảnh.
+    Rất hữu ích khi biết tên hàm/class/biến lỗi từ stack trace và muốn tìm nó trong code.
+    Ví dụ: search_in_file('weather-app/app.py', 'ImportError', 3)
+    """
+    logger.info(f"🔍 AI đang tìm '{keyword}' trong file: {file_path}")
+    try:
+        safe_path = os.path.abspath(file_path)
+        if not safe_path.startswith(os.getcwd()):
+            return "❌ Lỗi bảo mật: Không được phép đọc file ngoài thư mục dự án."
+
+        with open(safe_path, 'r', encoding='utf-8') as f:
+            all_lines = f.readlines()
+
+        keyword_lower = keyword.lower()
+        results = []
+        for idx, line in enumerate(all_lines):
+            if keyword_lower in line.lower():
+                lo = max(0, idx - context_lines)
+                hi = min(len(all_lines), idx + context_lines + 1)
+                block_lines = []
+                for i in range(lo, hi):
+                    marker = ">>" if i == idx else "  "
+                    block_lines.append(f"{i+1:4d}{marker}| {all_lines[i]}".rstrip())
+                results.append("\n".join(block_lines))
+
+        if not results:
+            return f"🔍 Không tìm thấy '{keyword}' trong file '{file_path}'."
+
+        header = f"🔍 Tìm thấy {len(results)} kết quả cho '{keyword}' trong '{file_path}':\n"
+        body = ("\n" + "-"*40 + "\n").join(results)
+        output = header + body
+
+        MAX_CHARS = 5000
+        if len(output) > MAX_CHARS:
+            output = output[:MAX_CHARS] + "\n... [CẮT BỚT - còn nhiều kết quả hơn]"
+        return output
+
+    except FileNotFoundError:
+        return f"❌ Lỗi: Không tìm thấy file '{file_path}'"
+    except Exception as e:
+        return f"❌ Lỗi khi tìm kiếm trong file {file_path}: {str(e)}"
     
 # ==========================================
 # NHÓM TOOLS: MONITORING & HEALTH CHECK
