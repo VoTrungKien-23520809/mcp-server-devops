@@ -1,16 +1,29 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm AS builder
 
 WORKDIR /app
 
-# Bơm thêm build-essential và gcc để compile các thư viện Data/C++
-RUN apt-get update && apt-get upgrade -y && \
-    apt-get install -y \
-    wget \
-    unzip \
-    curl \
-    fontconfig \
+# Bơm thêm build-essential và gcc để compile các thư viện Data/C++ ở stage builder
+RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+# Cài đặt thư viện Python vào thư mục user
+RUN pip install --user --no-cache-dir --upgrade pip && \
+    pip install --user --no-cache-dir -r requirements.txt
+
+# --- STAGE 2: FINAL IMAGE ---
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+# Cập nhật bảo mật và CHỈ cài đặt các package cần thiết cho runtime (curl, fontconfig)
+# Loại bỏ wget, unzip, build-essential (những gói kéo theo Perl gây lỗi bảo mật)
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y \
+    curl \
+    fontconfig \
     && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -22,12 +35,13 @@ RUN mkdir -p /usr/share/fonts/truetype/lato && \
     curl -L -o /usr/share/fonts/truetype/lato/Lato-Regular.ttf "https://github.com/google/fonts/raw/main/ofl/lato/Lato-Regular.ttf" && \
     fc-cache -f -v
 
-# Tối ưu cài đặt Python (tránh rác cache làm phình Image)
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Copy toàn bộ thư viện Python đã được compile từ builder sang
+COPY --from=builder /root/.local /root/.local
 
-# Copy toàn bộ code vào (Sếp nên tạo thêm file .dockerignore để loại bỏ thư mục venv/ .git nhé)
+# Đưa thư mục user bin vào PATH để có thể chạy streamlit
+ENV PATH=/root/.local/bin:$PATH
+
+# Copy toàn bộ code vào
 COPY . .
 
 # Create log directory
