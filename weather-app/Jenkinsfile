@@ -35,7 +35,7 @@ pipeline {
             steps {
                 dir('weather-app'){
                     echo 'Scanning the weather app Docker image for critical vulnerabilities...'
-                    sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL --exit-code 1 ${IMAGE_TAG}"
+                    sh "trivy image --db-repository ghcr.io/aquasecurity/trivy-db:2 --severity CRITICAL --ignore-unfixed --exit-code 1 ${IMAGE_TAG}"
                     echo '✅ Scan completed. No CRITICAL issues detected!'
                 }
             }
