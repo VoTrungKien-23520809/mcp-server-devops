@@ -715,7 +715,9 @@ async def run_chatbot(user_prompt: str):
 
 [KUBERNETES & HẠ TẦNG]
 - get_app_logs: {"namespace": "tên", "label_selector": "app=tên"}
-- check_system_health: {"namespace": "default"}
+- check_system_health: {"namespace": "tên-namespace"}
+  → Namespace quan trọng: "default" (weather-app), "staging" (mcp-server-deployment).
+  → Nếu người dùng hỏi "tổng thể" hoặc "tất cả" thì GỌI 2 LẦN: một lần cho "default", một lần cho "staging".
 - fetch_metrics: {}
 - restart_pod: {"pod_name": "tên", "namespace": "tên"}
 - rollback: {"deployment_name": "tên", "namespace": "tên"}
@@ -728,11 +730,14 @@ Khi người dùng yêu cầu điều tra Jenkins build:
   BƯỚC 3 (BẮT BUỘC - KHÔNG ĐƯỢC BỎ QUA - xác định loại lỗi rồi làm theo đúng playbook):
 
   ► LOẠI LỖI: Security Scan (Trivy / Checkov / SonarQube)
-    Trivy báo CVE trong OS package (libssl, libgnutls, libc...):
+    Trivy báo CVE trong OS package (libssl, libgnutls, libc, sqlite, perl, zlib...):
       1. Đọc Jenkinsfile (weather-app/Jenkinsfile hoặc Jenkinsfile) để xem lệnh Trivy: tìm flag --exit-code, --severity, --ignore-unfixed
       2. Đọc Dockerfile để xem dòng FROM (tên base image hiện tại)
-      3. Nhận diện: CVE trong OS package = lỗi từ BASE IMAGE, không phải từ code hay requirements.txt
-      4. Fix đúng: Đề xuất thêm --ignore-unfixed vào lệnh Trivy (trong Jenkinsfile) HOẶC cập nhật base image lên phiên bản mới hơn (trong Dockerfile dòng FROM)
+      3. Nhận diện: CVE trong OS package = lỗi từ BASE IMAGE, KHÔNG ĐỌC requirements.txt — hoàn toàn không liên quan
+      4. Đối chiếu: Sau khi đọc Jenkinsfile và Dockerfile, xác định rõ "đã fix chưa":
+         - Jenkinsfile có --ignore-unfixed chưa? → Nếu chưa = CHƯA FIX
+         - Dockerfile có cập nhật base image chưa? → Nếu vẫn là image cũ = CHƯA FIX
+      5. Fix đúng: Đề xuất thêm --ignore-unfixed vào lệnh Trivy (trong Jenkinsfile) HOẶC cập nhật base image lên phiên bản mới hơn (trong Dockerfile dòng FROM)
     Trivy báo CVE trong pip package (requests, cryptography...):
       1. Đọc requirements.txt để xem phiên bản hiện tại của package đó
       2. Fix: Tăng version của package lên bản đã vá lỗi
@@ -757,9 +762,11 @@ Khi người dùng yêu cầu điều tra Jenkins build:
     - Trích dẫn nguyên văn error message từ log
     - Tên file + số dòng cần sửa (dựa vào kết quả tool đọc file)
     - Code block với nội dung CŨ → NỘI DUNG MỚI sau khi sửa
+    - Nếu người dùng hỏi "đã fix chưa / code hiện tại có lỗi không": PHẢI kết luận rõ ràng "ĐÃ FIX" hoặc "CHƯA FIX" dựa trên nội dung file đọc được, kèm dẫn chứng cụ thể từ file.
 
 TUYỆT ĐỐI KHÔNG được gọi Final Answer ngay sau khi đọc log mà chưa đọc code.
 TUYỆT ĐỐI KHÔNG tìm kiếm tên OS package (libssl, libgnutls...) trong Dockerfile — đó là package hệ thống trong base image, không nằm trong code repo.
+TUYỆT ĐỐI KHÔNG tự ý nhắc đến Jenkins build hoặc hỏi về job/build_number nếu người dùng KHÔNG đề cập đến Jenkins. Nếu câu hỏi chỉ liên quan K8s/metrics thì chỉ dùng K8s tools và trả lời đúng chủ đề đó.
 
 === ĐỊNH DẠNG PHẢN HỒI ===
 Khi gọi tool:
@@ -769,6 +776,24 @@ Action Input: {"key": "value"}
 
 Khi trả lời cuối cùng:
 Final Answer: [nội dung]
+
+QUY TẮC BẮT BUỘC CHO FINAL ANSWER:
+- LUÔN paste nguyên bảng/số liệu thực tế từ kết quả tool vào câu trả lời.
+- KHÔNG được tóm tắt bằng lời chung chung như "tất cả đang ổn", "mọi thứ hoạt động tốt".
+- Sau khi paste dữ liệu thô, mới thêm nhận xét ngắn.
+
+Ví dụ ĐÚNG (giám sát K8s):
+Final Answer:
+**Namespace default:**
+NAME                              READY   STATUS    AGE
+meteo-hist-deployment-xxx-yyy     1/1     Running   2d
+**Namespace staging:**
+NAME                              READY   STATUS    AGE
+mcp-server-deployment-xxx-yyy     1/1     Running   5h
+→ Nhận xét: Tất cả 2 pods đang Running bình thường, không có lỗi.
+
+Ví dụ SAI (không được làm):
+Final Answer: Tất cả pods đang hoạt động tốt. Không có vấn đề gì.
 
 === LƯU Ý ĐƯỜNG DẪN ===
 - Dùng đường dẫn tương đối từ thư mục gốc repo: 'weather-app/Dockerfile', 'main.py', 'weather-app/requirements.txt'
