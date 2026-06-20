@@ -13,7 +13,8 @@ from fastapi import FastAPI, BackgroundTasks, Request
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from contextlib import asynccontextmanager
-from langchain_ollama import OllamaLLM
+from multi_agent import process_with_multi_agent
+from langchain_ollama import ChatOllama
 from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -92,7 +93,7 @@ def analyze_system_hardware():
 
 OPT_CTX, MAX_HISTORY_CHARS = analyze_system_hardware()
 Model_name = "qwen2.5:14b"
-llm = OllamaLLM(model=Model_name, num_ctx=OPT_CTX)
+llm = ChatOllama(model=Model_name, num_ctx=OPT_CTX)
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 app = FastAPI()
@@ -189,117 +190,14 @@ async def run_investigation(job_name: str):
                 await session.initialize()
                 print("✅ Đã kết nối thành công tới MCP Server (CI/CD Mode)!")
 
-                SYSTEM_PROMPT = """Bạn là một Kỹ sư SRE + Developer cấp cao, có khả năng đọc log và phân tích mã nguồn.
-QUY TẮC ĐIỀU TRA (REACT LOOP):
-1. THOUGHT: Suy nghĩ phải NGẮN GỌN (tối đa 4 câu). Phân tích logic vấn đề.
-2. ACTION: Bạn CHỈ ĐƯỢC GỌI 1 TOOL DUY NHẤT trong mỗi vòng lặp. Phải đợi có kết quả rồi mới gọi tool tiếp theo.
+                USER_TASK = f"Nhiệm vụ: Phân tích nguyên nhân lỗi build của job {job_name}. Hãy tìm stage lỗi và log lỗi tương ứng để phân tích."
 
-Danh sách Tools:
-- get_build_overview: {"job_name": "tên-job"}
-- get_jenkins_logs: {"job_name": "tên-job", "target_stage": "Tên Stage (Tùy chọn)"}
-- list_directory: {"directory_path": "đường-dẫn"}
-- read_project_file: {"file_path": "đường-dẫn-file", "start_line": số-dòng-bắt-đầu (tùy chọn), "end_line": số-dòng-kết-thúc (tùy chọn)}
-- search_in_file: {"file_path": "đường-dẫn-file", "keyword": "từ-khóa-lỗi", "context_lines": 5}
-- get_app_logs: {"namespace": "tên-namespace", "label_selector": "app=tên-app"}
-- get_k8s_nodes: {}
-- fetch_metrics: {}
-- check_system_health: {"namespace": "tên-namespace"}
-- rollback: {"deployment_name": "tên-deployment", "namespace": "tên-namespace"}
-- restart_pod: {"pod_name": "tên-pod", "namespace": "tên-namespace"}
-
-BẠN CHỈ ĐƯỢC PHẢN HỒI THEO 1 TRONG 2 ĐỊNH DẠNG SAU:
-
-ĐỊNH DẠNG 1 (Khi cần gọi Tool):
-Thought: [Suy nghĩ ngắn gọn]
-Action: [tên-tool]
-Action Input: [JSON]
-
-ĐỊNH DẠNG 2 (CHỈ GỌI KHI ĐÃ ĐỌC XONG FILE CODE VÀ XÁC ĐỊNH ĐƯỢC DÒNG LỖI):
-Thought: Tôi đã tìm ra nguyên nhân và đọc xong code cần sửa. Sẵn sàng báo cáo.
-Final Answer:
-[BẠN BẮT BUỘC PHẢI VIẾT BÁO CÁO SRE TOÀN DIỆN BẰNG TIẾNG VIỆT, SỐNG ĐỘNG, DÙNG MARKDOWN CHUYÊN NGHIỆP:]
-#### 1. Tóm tắt sự cố:
-- Stage nào bị lỗi, mã lỗi gì, thông báo lỗi gốc là gì (trích dẫn nguyên văn từ log).
-#### 2. Phân tích nguyên nhân gốc rễ (Root Cause):
-- Lỗi xuất phát từ file nào, dòng nào, hàm nào (dựa vào kết quả read_project_file hoặc search_in_file).
-#### 3. Giải pháp sửa lỗi (Cụ thể 100%):
-- Phải cung cấp đoạn code sửa lỗi cụ thể trong khối markdown ```language, chỉ rõ dòng số cần sửa, giải thích lý do thay đổi.
-#### 4. Tình trạng ứng dụng / Hạ tầng:
-- (Nếu Deploy lỗi: nêu hành động rollback/restart. Nếu Build lỗi: ghi 'Chưa deploy, không cần kiểm tra K8s').
-"""
-
-                USER_TASK = f"""
-Nhiệm vụ điều tra:
-
-[GIAI ĐOẠN 1 - XÁC ĐỊNH LỖI]
-1. Gọi `get_build_overview` (job_name: '{job_name}') ĐẦU TIÊN để xác định Stage nào bị FAILED.
-2. Gọi `get_jenkins_logs` với `target_stage` = tên Stage bị lỗi để lấy thông tin lỗi chi tiết.
-   - Đọc kỹ log: tìm EXCEPTION TYPE, ERROR MESSAGE, FILE/MODULE lỗi (e.g. 'ModuleNotFoundError: No module named X', 'SyntaxError at line Y', 'COPY failed: file not found').
-
-[GIAI ĐOẠN 2 - ĐỐI CHIẾU VỚI CODE (BẮT BUỘC)]
-3. Dựa vào thông tin từ log, xác định file nào trong repo có khả năng gây ra lỗi. Sử dụng:
-   - `search_in_file` để tìm từ khóa lỗi / tên hàm / tên module trong file liên quan.
-   - `read_project_file` để đọc toàn bộ file và hiểu context (có thể dùng start_line/end_line để chỉ đọc khu vực xung quanh dòng lỗi).
-   - Nếu không biết file ở đâu: gọi `list_directory` trước để khám phá cấu trúc thư mục.
-
-[RẼ NHÁNH ĐIỀU TRA]
-- Lỗi ở Build / Unit Test / Security Scan: Nguyên nhân là mã nguồn hoặc config. Cần đọc code để gợi ý sửa. KHÔNG cần kiểm tra K8s.
-- Lỗi ở Deploy: Cần gọi `check_system_health` và `get_app_logs`. Nếu Pod bị CrashLoop/ImagePull → BẮT BUỘC gọi `rollback`.
-
-⚠️ QUY TẮC ĐƯỜNG DẪN QUAN TRỌNG:
-- Khi dùng tool đọc file: Bạn đang đứng ở thư mục gốc của Repo. Dùng đường dẫn tương đối (VD: 'weather-app/Dockerfile', 'main.py').
-- TUYỆT ĐỐI KHÔNG gọi Final Answer khi chưa thực hiện ĐỐI CHIẾU VỚI CODE (Giai đoạn 2).
-"""
-
-                history = ""
-                max_steps = 10 
-                
-                for step in range(max_steps):
-                    print(f"\n--- [Vòng lặp CI/CD thứ {step + 1}/{max_steps}] ---")
-                    prompt = f"{SYSTEM_PROMPT}\n\nLịch sử điều tra:\n{history}\n\nNhiệm vụ của bạn: {USER_TASK}\n\nBước tiếp theo của bạn là gì?"
-                    response = llm.invoke(prompt)
-                    print(f"🤖 AI Suy nghĩ & Quyết định:\n{response}\n")
-                    
-                    if "Final Answer:" in response:
-                        final_report = response.split("Final Answer:")[1].strip()
-                        print("\n" + "="*40 + "\n👉 BÁO CÁO PHÂN TÍCH HỆ THỐNG (AI SRE REPORT)\n" + "="*40)
-                        print(final_report)
-                        print("="*40)
-                        alert_msg = f"🚨 **BÁO CÁO JENKINS TỪ AI SRE** 🚨\n\n{final_report}"
-                        send_discord_alert(alert_msg)
-                        break
-                        
-                    action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
-                    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
-                    
-                    if action_match and input_match:
-                        tool_name = action_match.group(1).strip()
-                        raw_json = re.sub(r'```json\s*|```', '', input_match.group(1).strip())
-                        
-                        try:
-                            tool_args = json.loads(raw_json)
-                            print(f"🛠️ MCP Server đang thực thi Tool: [{tool_name}] với tham số {tool_args}")
-                            tool_result = await session.call_tool(tool_name, arguments=tool_args)
-                            observation = tool_result.content[0].text
-                            
-                            if len(observation) > 6000:
-                                observation = observation[:6000] + "\n...[ĐÃ CẮT BỚT VÌ LOG QUÁ DÀI]..."
-                                
-                            print(f"✅ Đã có bằng chứng! (Observation: {len(observation)} ký tự). Trả về cho AI phân tích...")
-                            history += f"\nThought: {response}\nObservation: {observation}\n"
-                        except json.JSONDecodeError:
-                            print("⚠️ AI xuất sai định dạng JSON! Bắt nó thử lại...")
-                            history += f"\nThought: {response}\nObservation: LỖI: Action Input không phải JSON hợp lệ.\n"
-                        except Exception as e:
-                            print(f"⚠️ Lỗi máy chủ khi gọi Tool {tool_name}: {e}")
-                            history += f"\nThought: {response}\nObservation: LỖI KHI GỌI TOOL: {str(e)}.\n"
-                    else:
-                        print("⚠️ AI đang 'ngáo', không tuân thủ định dạng. Ép nó trả lời lại...")
-                        history += f"\nThought: {response}\nObservation: LỖI: Bạn BẮT BUỘC phải dùng từ khóa 'Action:' và 'Action Input:' hoặc 'Final Answer:'.\n"
-                    
-                    if len(history) > MAX_HISTORY_CHARS:
-                        history = "...\n" + history[-MAX_HISTORY_CHARS:]
-
+                final_answer = await process_with_multi_agent(USER_TASK, session, llm, stream_output=True)
+                print("\n" + "="*40 + "\n👉 BÁO CÁO PHÂN TÍCH HỆ THỐNG (AI SRE REPORT)\n" + "="*40)
+                print(final_answer)
+                print("="*40)
+                alert_msg = f"🚨 **BÁO CÁO JENKINS TỪ AI SRE** 🚨\n\n{final_answer}"
+                send_discord_alert(alert_msg)
     except Exception as e:
         print(f"❌ Lỗi nghiêm trọng: {e}")
 
@@ -318,96 +216,14 @@ async def run_metrics_investigation(alert_name: str, alert_desc: str):
                 await session.initialize()
                 print("✅ Đã kết nối thành công tới MCP Server (Infra Mode)!")
 
-                SYSTEM_PROMPT = """Bạn là một Kỹ sư SRE cấp cao. 
-QUY TẮC ĐIỀU TRA (REACT LOOP):
-1. THOUGHT: Suy nghĩ NGẮN GỌN (tối đa 4 câu).
-2. ACTION: CHỈ ĐƯỢC GỌI 1 TOOL DUY NHẤT trong mỗi vòng lặp.
+                USER_TASK = f"Nhiệm vụ: Phân tích cảnh báo Prometheus: {alert_name} - {alert_desc}. Hãy kiểm tra pod log hoặc hệ thống K8s tương ứng để tìm nguyên nhân và khắc phục."
 
-Danh sách Tools: 
-- get_app_logs: {"namespace": "tên-namespace", "label_selector": "app=tên-app"}
-- get_k8s_nodes: {}
-- fetch_metrics: {}
-- list_directory: {"directory_path": "đường-dẫn"}
-- read_project_file: {"file_path": "đường-dẫn-file"}
-- check_system_health: {"namespace": "tên-namespace"}
-- restart_pod: {"pod_name": "tên-pod", "namespace": "tên-namespace"}
-- scale_deployment: {"deployment_name": "tên-deployment", "replicas": số-lượng, "namespace": "tên-namespace"}
-- rollback: {"deployment_name": "tên-deployment", "namespace": "tên-namespace"}
-(TUYỆT ĐỐI KHÔNG dùng tool get_jenkins_logs vì đây là lỗi hạ tầng, không phải lỗi build).
-
-ĐỊNH DẠNG 1 (Khi cần gọi Tool):
-Thought: [Suy nghĩ ngắn gọn]
-Action: [tên-tool]
-Action Input: [JSON]
-
-ĐỊNH DẠNG 2 (CHỈ GỌI KHI ĐÃ CÓ ĐỦ BẰNG CHỨNG VÀ ĐÃ THỰC THI XONG HÀNH ĐỘNG SỬA CHỮA):
-Final Answer:
-#### 1. Nguyên nhân cảnh báo: (Phân tích lý do gây ra Alert).
-#### 2. Tình trạng thực tế: (Trích xuất data từ fetch_metrics, get_k8s_nodes và check_system_health).
-#### 3. Phân tích Ứng dụng: (Có pod nào đang spam log hoặc ngốn tài nguyên không?).
-#### 4. Hành động Tự động đã thực hiện (Auto-remediation): (BẮT BUỘC NÊU RÕ bạn đã dùng lệnh scale, restart hay rollback nào, số lượng bao nhiêu, và kết quả log trả về ra sao).
-
-QUY TẮC XỬ LÝ SỰ CỐ NGHIÊM NGẶT (MUST FOLLOW):
-1. ĐỊNH TUYẾN DEADLOCK: Nếu Alert Name là "AppDeadlock" hoặc nội dung chứa từ "Deadlock":
-   - BỎ QUA bước kiểm tra log ứng dụng (get_app_logs).
-   - BẮT BUỘC gọi công cụ `restart_pod` ngay lập tức để giải phóng bộ nhớ. Không được phép dùng `rollback`.
-2. ĐỊNH TUYẾN CRASHLOOP: Nếu Pod ở trạng thái 'CrashLoopBackOff', 'Error', hoặc 'ImagePullBackOff':
-   - TUYỆT ĐỐI KHÔNG dùng `restart_pod`.
-   - BẮT BUỘC gọi công cụ `rollback` để quay về revision an toàn.
-3. NGHIÊM CẤM suy diễn nguyên nhân từ các cảnh báo log cũ (như 'client.caching') nếu trạng thái Pod vẫn đang Running.
-"""
-
-                USER_TASK = f"""
-Cảnh báo từ Prometheus: '{alert_name}'
-Mô tả chi tiết: '{alert_desc}'
-
-Nhiệm vụ của bạn:
-1. Đọc kỹ mô tả cảnh báo để tự suy luận tên Ứng dụng, Deployment và Namespace đang gặp sự cố.
-(💡 MẸO SRE QUAN TRỌNG: Trong hệ thống này, tên Deployment thường là tên ứng dụng cộng thêm hậu tố '-deployment'. Ví dụ: ứng dụng 'meteo-hist' thì deployment là 'meteo-hist-deployment').
-2. Gọi `fetch_metrics` hoặc `check_system_health` để thu thập dữ liệu tải thực tế và trạng thái Pod.
-3. Gọi `get_app_logs` (namespace: 'default', label_selector: 'app=meteo-hist') để xem ứng dụng có sinh log bất thường gây nghẽn tài nguyên không.
-4. Hành động khắc phục (BẮT BUỘC):
-- Dựa vào tính chất của lỗi, hãy tự quyết định gọi `scale_deployment` (để tăng Pod nếu quá tải), HOẶC `restart_pod` (nếu Pod treo), HOẶC `rollback` (nếu lỗi nghiêm trọng).
-⚠️ QUY TẮC THÉP: Bạn PHẢI thực hiện việc gọi Tool hành động bằng ĐỊNH DẠNG 1 trước. Chỉ khi Tool trả về kết quả thành công thì mới được phép chuyển sang ĐỊNH DẠNG 2 (Final Answer) để kết thúc.
-TUYỆT ĐỐI KHÔNG ĐƯỢC nhét lệnh Action vào bên trong khối Final Answer!
-5. Dựa trên dữ liệu và hành động ĐÃ THỰC HIỆN XONG, đưa ra Final Answer báo cáo.
-"""
-
-                history = ""
-                max_steps = 10 
-                
-                for step in range(max_steps):
-                    print(f"\n--- [Vòng lặp Hạ Tầng thứ {step + 1}/{max_steps}] ---")
-                    prompt = f"{SYSTEM_PROMPT}\n\nLịch sử:\n{history}\n\nNhiệm vụ: {USER_TASK}\n\nBước tiếp theo là gì?"
-                    response = llm.invoke(prompt)
-                    print(f"🤖 AI Suy nghĩ:\n{response}\n")
-                    
-                    if "Final Answer:" in response:
-                        final_report = response.split("Final Answer:")[1].strip()
-                        alert_msg = f"🔥 **BÁO ĐỘNG K3S TỪ AI SRE** 🔥\n\n{final_report}"
-                        send_discord_alert(alert_msg)
-                        break
-                        
-                    action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
-                    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
-                    
-                    if action_match and input_match:
-                        tool_name = action_match.group(1).strip()
-                        raw_json = re.sub(r'```json\s*|```', '', input_match.group(1).strip())
-                        try:
-                            tool_args = json.loads(raw_json)
-                            tool_result = await session.call_tool(tool_name, arguments=tool_args)
-                            observation = tool_result.content[0].text
-                            if len(observation) > 4000: observation = observation[:4000] + "\n...[CẮT BỚT]..."
-                            history += f"\nThought: {response}\nObservation: {observation}\n"
-                        except Exception as e:
-                            history += f"\nObservation: LỖI KHI GỌI TOOL: {str(e)}.\n"
-                    else:
-                        history += "\nObservation: Sai định dạng ReAct. Vui lòng thử lại.\n"
-                        
-                    if len(history) > MAX_HISTORY_CHARS:
-                        history = "...\n" + history[-MAX_HISTORY_CHARS:]
-
+                final_answer = await process_with_multi_agent(USER_TASK, session, llm, stream_output=True)
+                print("\n" + "="*40 + "\n👉 BÁO CÁO TỪ AI SRE\n" + "="*40)
+                print(final_answer)
+                print("="*40)
+                alert_msg = f"🚨 **BÁO CÁO SỰ CỐ TỪ AI SRE** 🚨\n\n{final_answer}"
+                send_discord_alert(alert_msg)
     except Exception as e:
         print(f"❌ Lỗi: {e}")
 
@@ -425,73 +241,14 @@ async def run_success_report(job_name: str):
                 await session.initialize()
                 print("✅ Đã kết nối thành công tới MCP Server (Report Mode)!")
 
-                SYSTEM_PROMPT = """Bạn là một Kỹ sư SRE cấp cao. 
-QUY TẮC LÀM VIỆC (REACT LOOP):
-1. THOUGHT: Suy nghĩ phải NGẮN GỌN (tối đa 4 câu).
-2. ACTION: CHỈ ĐƯỢC GỌI 1 TOOL DUY NHẤT trong mỗi vòng lặp.
+                USER_TASK = f"Nhiệm vụ: Viết báo cáo sức khỏe hệ thống sau khi job Jenkins {job_name} deploy thành công. (Gợi ý: Kiểm tra K8s health và metrics)."
 
-Danh sách Tools:
-- fetch_metrics: {}
-- check_system_health: {"namespace": "tên-namespace"}
-
-ĐỊNH DẠNG 1 (Khi cần gọi Tool):
-Thought: [Suy nghĩ bước tiếp theo]
-Action: [tên-tool]
-Action Input: [JSON]
-
-ĐỊNH DẠNG 2 (CHỈ GỌI KHI ĐÃ LẤY ĐỦ DỮ LIỆU TỪ PROMETHEUS VÀ K8S):
-Final Answer:
-[BẠN BẮT BUỘC PHẢI VIẾT BÁO CÁO BẰNG TIẾNG VIỆT, SỬ DỤNG MARKDOWN CHUYÊN NGHIỆP VỚI CẤU TRÚC SAU:]
-#### 1. Trạng thái CI/CD:
-- (Xác nhận bản build đã deploy thành công).
-#### 2. Tình trạng Kubernetes:
-- (Liệt kê số lượng Pod đang chạy, namespace, có Pod nào bị lỗi không dựa vào tool check_system_health).
-#### 3. Hiệu năng Hệ thống (Prometheus):
-- (Ghi rõ % CPU và RAM hiện tại).
-#### 4. Đánh giá chung:
-- (Đưa ra kết luận hệ thống có an toàn để nhận traffic không).
-"""
-
-                USER_TASK = f"""
-Nhiệm vụ của bạn: Job Jenkins '{job_name}' VỪA DEPLOY THÀNH CÔNG.
-1. Gọi `check_system_health` (namespace: 'default') để kiểm tra xem các Pod mới đã khởi động thành công (Running) chưa.
-2. Gọi `fetch_metrics` để lấy chỉ số CPU và RAM hiện tại xem có bị quá tải không.
-3. Tổng hợp dữ liệu và xuất Final Answer để báo cáo.
-"""
-
-                history = ""
-                max_steps = 5 
-                
-                for step in range(max_steps):
-                    print(f"\n--- [Vòng lặp Báo Cáo thứ {step + 1}/{max_steps}] ---")
-                    prompt = f"{SYSTEM_PROMPT}\n\nLịch sử:\n{history}\n\nNhiệm vụ: {USER_TASK}\n\nBước tiếp theo là gì?"
-                    response = await llm.ainvoke(prompt)
-                    print(f"🤖 AI Suy nghĩ:\n{response}\n")
-                    
-                    if "Final Answer:" in response:
-                        final_report = response.split("Final Answer:")[1].strip()
-                        alert_msg = f"🎉 **BÁO CÁO DEPLOY THÀNH CÔNG** 🎉\n\n{final_report}"
-                        send_discord_alert(alert_msg)
-                        break
-                        
-                    action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
-                    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
-                    
-                    if action_match and input_match:
-                        tool_name = action_match.group(1).strip()
-                        raw_json = re.sub(r'```json\s*|```', '', input_match.group(1).strip())
-                        try:
-                            tool_args = json.loads(raw_json)
-                            tool_result = await session.call_tool(tool_name, arguments=tool_args)
-                            history += f"\nThought: {response}\nObservation: {tool_result.content[0].text}\n"
-                        except Exception as e:
-                            history += f"\nObservation: LỖI KHI GỌI TOOL: {str(e)}.\n"
-                    else:
-                        history += "\nObservation: Sai định dạng ReAct. Vui lòng thử lại.\n"
-                        
-                    if len(history) > MAX_HISTORY_CHARS:
-                        history = "...\n" + history[-MAX_HISTORY_CHARS:]
-
+                final_answer = await process_with_multi_agent(USER_TASK, session, llm, stream_output=True)
+                print("\n" + "="*40 + "\n👉 AI SRE REPORT\n" + "="*40)
+                print(final_answer)
+                print("="*40)
+                alert_msg = f"✅ **BÁO CÁO THÀNH CÔNG TỪ AI SRE** ✅\n\n{final_answer}"
+                send_discord_alert(alert_msg)
     except Exception as e:
         import traceback
         print(f"❌ Lỗi: {e}")
@@ -510,62 +267,13 @@ async def run_smart_cd_approval(k8s_dir: str = "weather-app/k8s"):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 
-                SYSTEM_PROMPT = """Bạn là một Kỹ sư SecOps/Gatekeeper cấp cao.
-Nhiệm vụ của bạn là quyết định xem có cho phép đưa bản cập nhật ứng dụng (Kubernetes Deployment) lên môi trường Production hay không.
-
-QUY TẮC ĐIỀU TRA:
-1. THOUGHT: Suy nghĩ NGẮN GỌN (tối đa 4 câu).
-2. ACTION: CHỈ GỌI 1 TOOL DUY NHẤT trong mỗi vòng lặp.
-
-Danh sách Tools:
-- read_project_file: {"file_path": "đường-dẫn"}
-- fetch_metrics: {}
-- check_system_health: {"namespace": "default"}
-
-ĐỊNH DẠNG 1 (GỌI TOOL):câu
-Thought: [Suy nghĩ]
-Action: [tên-tool]
-Action Input: [JSON]
-
-ĐỊNH DẠNG 2 (QUYẾT ĐỊNH PHÊ DUYỆT):
-Final Answer:
-#### QUYẾT ĐỊNH: [CHỈ GHI '🟢 APPROVE' HOẶC '🔴 REJECT']
-#### 1. Đánh giá rủi ro cấu hình K8s: (Phân tích file deployment.yaml. Có dùng image: latest không? Số lượng replicas có hợp lý không? Có giới hạn tài nguyên resources limit không?)
-#### 2. Sức chịu tải K8s: (CPU/RAM hiện tại có an toàn để deploy không?)
-#### 3. Lý do: (Giải thích ngắn gọn quyết định của bạn)
-"""
-                USER_TASK = f"""
-Hãy thẩm định rủi ro trước khi deploy:
-1. Gọi `fetch_metrics` và `check_system_health` để xem hệ thống có đang quá tải/lỗi không.
-2. Gọi `read_project_file` với tham số là '{k8s_dir}/deployment.yaml' để đọc cấu hình bản cập nhật sắp được đưa lên.
-3. Đưa ra Quyết định APPROVE (Cho phép) hoặc REJECT (Từ chối).
-"""
-                history = ""
-                max_steps = 5 
-                for step in range(max_steps):
-                    print(f"\n--- [Vòng lặp Smart CD thứ {step + 1}/{max_steps}] ---")
-                    prompt = f"{SYSTEM_PROMPT}\n\nLịch sử:\n{history}\n\nNhiệm vụ: {USER_TASK}\n\nBước tiếp theo là gì?"
-                    response = await asyncio.to_thread(llm.invoke, prompt) # Buff bất tử
-                    print(f"🤖 AI Suy nghĩ:\n{response}\n")
-                    
-                    if "Final Answer:" in response:
-                        report = response.split("Final Answer:")[1].strip()
-                        send_discord_alert(f"📋 **SMART CD: KẾT QUẢ THẨM ĐỊNH DEPLOY** 📋\n\n{report}")
-                        break
-                        
-                    action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
-                    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
-                    
-                    if action_match and input_match:
-                        tool_name = action_match.group(1).strip()
-                        try:
-                            tool_args = json.loads(re.sub(r'```json\s*|```', '', input_match.group(1).strip()))
-                            result = await session.call_tool(tool_name, arguments=tool_args)
-                            history += f"\nThought: {response}\nObservation: {result.content[0].text}\n"
-                        except Exception as e:
-                            history += f"\nObservation: LỖI GỌI TOOL: {str(e)}\n"
-                    else:
-                        history += "\nObservation: Sai định dạng.\n"
+                USER_TASK = f"Nhiệm vụ: Thẩm định rủi ro Smart CD. Hãy kiểm tra file cấu hình deployment trong thư mục {k8s_dir} xem có rủi ro gì không (ví dụ: dùng latest tag). Đưa ra Quyết định APPROVE (Cho phép) hoặc REJECT (Từ chối)."
+                final_answer = await process_with_multi_agent(USER_TASK, session, llm, stream_output=True)
+                print("\n" + "="*40 + "\n👉 BÁO CÁO THẨM ĐỊNH (AI GATEKEEPER)\n" + "="*40)
+                print(final_answer)
+                print("="*40)
+                alert_msg = f"🛡️ **SMART CD: YÊU CẦU PHÊ DUYỆT DEPLOY** 🛡️\n\n{final_answer}"
+                send_discord_alert(alert_msg)
     except Exception as e:
         print(f"❌ Lỗi Smart CD: {e}")
 
@@ -690,141 +398,8 @@ async def run_chatbot(user_prompt: str):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 
-                SYSTEM_PROMPT = """Bạn là AI SRE + Developer Chatbot cấp cao, có khả năng đọc log Jenkins VÀ phân tích mã nguồn trong repo.
-
-=== NGUYÊN TẮC CỐT LÕI ===
-1. LUÔN giao tiếp bằng TIẾNG VIỆT. Trả lời trực tiếp, không vòng vo.
-2. CHỈ ĐƯỢC GỌI 1 TOOL trong mỗi lượt. Đợi kết quả rồi mới gọi tiếp.
-3. QUY TẮC THÉP: Không được dùng 'Final Answer' trong cùng lượt với 'Action'.
-
-=== DANH SÁCH TOOLS ===
-[JENKINS - CI/CD]
-- get_build_overview: {"job_name": "tên-job", "build_number": "lastBuild hoặc số nguyên"}
-  → Xem bảng tóm tắt tất cả stages (status, thời gian). LUÔN gọi tool này TRƯỚC khi gọi get_jenkins_logs.
-- get_jenkins_logs: {"job_name": "tên-job", "build_number": "lastBuild hoặc số nguyên", "target_stage": "Tên Stage cụ thể"}
-  → Lấy log chi tiết. BẮT BUỘC truyền target_stage = tên stage bị FAILED (lấy từ get_build_overview).
-
-[ĐỌC CODE & TÌM LỖI TRONG REPO]
-- list_directory: {"directory_path": "đường-dẫn"}
-  → Xem danh sách file trong thư mục (như lệnh ls).
-- read_project_file: {"file_path": "đường-dẫn-file", "start_line": số (tùy chọn), "end_line": số (tùy chọn)}
-  → Đọc file có đánh số dòng. Dùng start_line/end_line để chỉ đọc vùng cần thiết.
-- search_in_file: {"file_path": "đường-dẫn-file", "keyword": "từ-khóa", "context_lines": 5}
-  → Tìm kiếm từ khóa trong file, trả về các dòng khớp kèm context xung quanh (như grep).
-  → Dùng khi biết tên hàm/module/lỗi từ stack trace và muốn tìm trong code.
-
-[KUBERNETES & HẠ TẦNG]
-- get_app_logs: {"namespace": "tên", "label_selector": "app=tên"}
-- check_system_health: {"namespace": "default"}
-- fetch_metrics: {}
-- restart_pod: {"pod_name": "tên", "namespace": "tên"}
-- rollback: {"deployment_name": "tên", "namespace": "tên"}
-- scale_deployment: {"deployment_name": "tên", "replicas": số, "namespace": "tên"}
-
-=== QUY TRÌNH ĐIỀU TRA BUILD LỖI (BẮT BUỘC THEO THỨ TỰ) ===
-Khi người dùng yêu cầu điều tra Jenkins build:
-  BƯỚC 1: get_build_overview → xác định stage nào FAILED
-  BƯỚC 2: get_jenkins_logs với target_stage = tên stage lỗi → đọc error message, tìm: tên exception, tên file, tên module, số dòng lỗi
-  BƯỚC 3 (BẮT BUỘC - KHÔNG ĐƯỢC BỎ QUA - xác định loại lỗi rồi làm theo đúng playbook):
-
-  ► LOẠI LỖI: Security Scan (Trivy / Checkov / SonarQube)
-    Trivy báo CVE trong OS package (libssl, libgnutls, libc...):
-      1. Đọc Jenkinsfile (weather-app/Jenkinsfile hoặc Jenkinsfile) để xem lệnh Trivy: tìm flag --exit-code, --severity, --ignore-unfixed
-      2. Đọc Dockerfile để xem dòng FROM (tên base image hiện tại)
-      3. Nhận diện: CVE trong OS package = lỗi từ BASE IMAGE, không phải từ code hay requirements.txt
-      4. Fix đúng: Đề xuất thêm --ignore-unfixed vào lệnh Trivy (trong Jenkinsfile) HOẶC cập nhật base image lên phiên bản mới hơn (trong Dockerfile dòng FROM)
-    Trivy báo CVE trong pip package (requests, cryptography...):
-      1. Đọc requirements.txt để xem phiên bản hiện tại của package đó
-      2. Fix: Tăng version của package lên bản đã vá lỗi
-
-  ► LOẠI LỖI: Unit Test (pytest, unittest)
-    1. Đọc log để tìm: tên file test, tên hàm test, dòng lỗi, exception type
-    2. Gọi search_in_file với tên hàm bị lỗi trong file test đó
-    3. Đọc file source code tương ứng (không phải file test) để hiểu logic thực tế
-    4. Fix: Chỉ rõ dòng sai trong source code hoặc test
-
-  ► LOẠI LỖI: Build Docker Image
-    1. Đọc Dockerfile của project (weather-app/Dockerfile hoặc Dockerfile)
-    2. Tìm lệnh COPY/ADD bị lỗi (file not found), lệnh RUN bị lỗi (package không tồn tại)
-    3. Fix: Sửa đường dẫn COPY hoặc tên package trong RUN apt-get
-
-  ► LOẠI LỖI: Deploy to K8s / Staging
-    1. Gọi check_system_health để xem trạng thái Pod
-    2. Nếu CrashLoopBackOff → gọi rollback
-    3. Gọi get_app_logs để xem lý do crash
-
-  BƯỚC 4: Final Answer phải bao gồm:
-    - Trích dẫn nguyên văn error message từ log
-    - Tên file + số dòng cần sửa (dựa vào kết quả tool đọc file)
-    - Code block với nội dung CŨ → NỘI DUNG MỚI sau khi sửa
-
-TUYỆT ĐỐI KHÔNG được gọi Final Answer ngay sau khi đọc log mà chưa đọc code.
-TUYỆT ĐỐI KHÔNG tìm kiếm tên OS package (libssl, libgnutls...) trong Dockerfile — đó là package hệ thống trong base image, không nằm trong code repo.
-
-=== ĐỊNH DẠNG PHẢN HỒI ===
-Khi gọi tool:
-Thought: [suy nghĩ ngắn gọn]
-Action: [tên-tool]
-Action Input: {"key": "value"}
-
-Khi trả lời cuối cùng:
-Final Answer: [nội dung]
-
-=== LƯU Ý ĐƯỜNG DẪN ===
-- Dùng đường dẫn tương đối từ thư mục gốc repo: 'weather-app/Dockerfile', 'main.py', 'weather-app/requirements.txt'
-- KHÔNG dùng đường dẫn tuyệt đối từ log Jenkins như /var/lib/jenkins/...
-- Nếu người dùng không nói rõ tên job: mặc định dùng "weather-app-pipeline"
-"""
-                history = ""
-                max_steps = 10 
-                for step in range(max_steps):
-                    prompt = f"{SYSTEM_PROMPT}\n\nLịch sử:\n{history}\n\nNhiệm vụ: {user_prompt}\n\nBước tiếp theo là gì?"
-                    
-                    async def show_thinking():
-                        try:
-                            seconds = 0
-                            while True:
-                                await asyncio.sleep(15)
-                                seconds += 15
-                                print(f"⏳ (Đã đợi {seconds}s) AI vẫn đang suy nghĩ, vui lòng kiên nhẫn...")
-                        except asyncio.CancelledError:
-                            pass
-                            
-                    think_task = asyncio.create_task(show_thinking())
-                    try:
-                        response = await llm.ainvoke(prompt)
-                    finally:
-                        think_task.cancel()
-                    
-                    action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
-                    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
-                    
-                    if action_match and input_match:
-                        tool_name = action_match.group(1).strip()
-                        try:
-                            raw_json = re.sub(r'```json\s*|```', '', input_match.group(1).strip())
-                            tool_args = json.loads(raw_json)
-                            print(f"🛠️ Đang gọi Tool: [{tool_name}]...")
-                            tool_result = await session.call_tool(tool_name, arguments=tool_args)
-                            observation = tool_result.content[0].text
-                            # Cắt từ ĐẦU (giữ phần đầu chứa error message/line numbers), không cắt đuôi
-                            if len(observation) > 8000:
-                                observation = observation[:8000] + "\n...[CẮT BỚT - dùng start_line/end_line để đọc phần tiếp theo]..."
-                            history += f"\nThought: {response}\nObservation: {observation}\n"
-                        except Exception as e:
-                            history += f"\nObservation: LỖI GỌI TOOL: {str(e)}\n"
-                        
-                        # Chống tràn bộ nhớ Context Window của LLM
-                        if len(history) > MAX_HISTORY_CHARS:
-                            history = "...[LỊCH SỬ CŨ ĐÃ BỊ XÓA BỚT ĐỂ CHỐNG TRÀN RAM]...\n" + history[-MAX_HISTORY_CHARS:]
-
-                    elif "Final Answer:" in response:
-                        answer = response.split("Final Answer:")[1].strip()
-                        print(f"🤖 Chatbot:\n{answer}\n")
-                        break
-                    else:
-                        print(f"🤖 Chatbot:\n{response}\n")
-                        break
+                final_answer = await process_with_multi_agent(user_prompt, session, llm, stream_output=True)
+            print(f"🤖 Chatbot:\n{final_answer}\n")
     except Exception as e:
         print(f"❌ Lỗi Chatbot: {e}")
     finally:
