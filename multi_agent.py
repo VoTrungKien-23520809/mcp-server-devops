@@ -18,6 +18,28 @@ class AgentState(TypedDict):
     active_agent: str      # Theo dõi Node đang thực thi để gọi về đúng chỗ
     last_tool_call: str    # Chuỗi chữ ký lệnh trước đó để chống lặp vô tận
 
+def extract_json_from_text(text: str):
+    """Bulletproof JSON parser: Tìm đúng 1 block JSON hợp lệ đầu tiên và trả về (chuỗi_json, toàn_bộ_văn_bản_đã_cắt)."""
+    start_idx = text.find('Action Input:')
+    if start_idx == -1: return None, text
+    
+    json_start = text.find('{', start_idx)
+    if json_start == -1: return None, text
+    
+    open_brackets = 0
+    for i in range(json_start, len(text)):
+        if text[i] == '{':
+            open_brackets += 1
+        elif text[i] == '}':
+            open_brackets -= 1
+            if open_brackets == 0:
+                json_str = text[json_start:i+1]
+                # Lấy toàn bộ văn bản từ đầu cho đến hết block JSON đầu tiên
+                truncated_text = text[:i+1].strip()
+                return json_str, truncated_text
+    return None, text
+
+
 # ==========================================
 # SYSTEM PROMPTS CHO TỪNG SUB-AGENT
 # ==========================================
@@ -32,12 +54,14 @@ Action Input: [JSON]
 
 ĐỊNH DẠNG 2 (CHỈ GỌI KHI ĐÃ TÌM RA LỖI HOẶC HOÀN THÀNH NHIỆM VỤ):
 Thought: Tôi đã tìm ra lỗi / hoàn thành xong nhiệm vụ.
-Final Answer: [Báo cáo chi tiết cho người dùng]
+Final Answer: [Báo cáo chi tiết cho người dùng. BẮT BUỘC PHẢI trích dẫn các con số, metrics, log hoặc dữ liệu cụ thể lấy được từ Tool. KHÔNG trả lời chung chung!]
 
 ĐẶC QUYỀN (HANDOFF):
 Nếu bạn phát hiện lỗi thuộc chuyên môn của Agent khác, hãy dùng Tool giả lập sau để chuyển giao quyền:
 Action: hand_off
 Action Input: {"target_agent": "JENKINS" hoặc "K8S" hoặc "CODE", "reason": "Lý do chuyển giao"}
+
+LƯU Ý QUAN TRỌNG: Bạn BẮT BUỘC phải suy nghĩ (Thought) và trả lời (Final Answer) 100% bằng TIẾNG VIỆT. TUYỆT ĐỐI KHÔNG sử dụng tiếng Trung Quốc trong bất kỳ hoàn cảnh nào.
 """
 
 JENKINS_PROMPT = """Bạn là JENKINS SRE Agent. Nhiệm vụ của bạn là kiểm tra CI/CD, build pipelines.
@@ -46,14 +70,20 @@ Danh sách Tools:
 - get_jenkins_logs: {"job_name": "tên-job", "build_number": "lastBuild hoặc số", "target_stage": "Tên Stage"}
 """ + REACT_FORMAT
 
-K8S_PROMPT = """Bạn là KUBERNETES SRE Agent. Nhiệm vụ của bạn là kiểm tra log app, metrics, và hệ thống K8s.
+K8S_PROMPT = """Bạn là INFRA & KUBERNETES SRE Agent. Nhiệm vụ của bạn là kiểm tra hệ thống K8s và tài nguyên của toàn bộ các máy ảo.
+BẠN ĐƯỢC TRAO QUYỀN TỰ KHẮC PHỤC SỰ CỐ (AUTO-REMEDIATION):
+- Nếu phát hiện Pod bị lỗi ImagePullBackOff, ErrImagePull hoặc CrashLoopBackOff, BẮT BUỘC dùng tool 'rollback' ngay lập tức để cứu hệ thống, không được restart.
+- Nếu Pod bị treo đột ngột mà không có lỗi cụ thể, có thể dùng 'restart_pod'.
+- Nếu phát hiện hệ thống quá tải CPU/RAM diện rộng, HÃY dùng tool 'scale_deployment' để tăng Pod.
 Danh sách Tools:
 - get_app_logs: {"namespace": "tên", "label_selector": "app=tên"}
 - check_system_health: {"namespace": "tên"}
-- fetch_metrics: {}
+- query_prometheus: {"query_type": "cpu, ram, storage, network hoặc câu lệnh PromQL bất kỳ"} (MẸO: Tên Pod trong K8s luôn có chuỗi hash ở cuối. BẮT BUỘC dùng regex match '=~"tên-pod.*"' thay vì '=' khi tự viết PromQL).
 - restart_pod: {"pod_name": "tên", "namespace": "tên"}
 - rollback: {"deployment_name": "tên", "namespace": "tên"}
 - scale_deployment: {"deployment_name": "tên", "replicas": số, "namespace": "tên"}
+- get_pod_metrics: {"namespace": "tên"} (Dùng để tìm Pod nào đang cắn nhiều CPU/RAM nhất)
+- describe_pod: {"pod_name": "tên", "namespace": "tên"} (Dùng khi Pod bị Error, Pending hoặc CrashLoopBackOff để xem nguyên nhân ở phần Events)
 """ + REACT_FORMAT
 
 CODE_PROMPT = """Bạn là CODE ANALYSIS Agent. Nhiệm vụ của bạn là phân tích file mã nguồn trong repo.
@@ -76,7 +106,7 @@ async def router_node(state: AgentState):
     prompt = f"""Phân loại nhiệm vụ sau thành 1 trong 4 loại:
 1. 'CHAT': Hỏi han xã giao, xin chào, không liên quan kỹ thuật.
 2. 'JENKINS': Nhiệm vụ CI/CD, lỗi build pipeline, test, scan, webhook báo Jenkins.
-3. 'K8S': Nhiệm vụ Kubernetes, webhook Prometheus, pod bị crash, deploy, rollback.
+3. 'K8S': Nhiệm vụ K8s (quản lý pod, crash, deploy, rollback), webhook Prometheus, kiểm tra tài nguyên hạ tầng (CPU, RAM, ổ cứng, máy chủ, mạng).
 4. 'CODE': Nhiệm vụ chỉ định rõ việc đọc file code, xem repo, kiểm tra source code.
 Lưu ý: Nếu lỗi chưa rõ ràng nhưng có nhắc đến 'job' hoặc 'pipeline', chọn JENKINS.
 Yêu cầu: {state['user_prompt']}
@@ -126,10 +156,10 @@ async def _think_impl(state: AgentState, system_prompt: str, agent_name: str):
     finally:
         think_task.cancel()
         
-    # Cắt bỏ phần nội dung ảo giác (hallucination)
-    input_match = re.search(r"(Action Input:\s*\{.*?\})", response, re.DOTALL)
-    if input_match:
-        response = response[:input_match.end()].strip()
+    # Dùng parser xịn để bỏ qua nội dung ảo giác và lấy ĐÚNG khối JSON đầu tiên
+    _, truncated_response = extract_json_from_text(response)
+    if truncated_response:
+        response = truncated_response
         
     if state.get("stream_output", False):
         print(f"\n🤖 {agent_name} Agent Quyết định:\n{response}\n")
@@ -147,15 +177,14 @@ async def sre_tool_node(state: AgentState):
     """Executor dùng chung: Gọi Tool và trả kết quả về đúng Agent đang chạy"""
     response = state["final_answer"]
     action_match = re.search(r"Action:\s*([a-zA-Z0-9_]+)", response)
-    input_match = re.search(r"Action Input:\s*(\{.*?\})", response, re.DOTALL)
+    json_str, _ = extract_json_from_text(response)
     
     observation = ""
     current_call_signature = ""
-    if action_match and input_match:
+    if action_match and json_str:
         tool_name = action_match.group(1).strip()
         try:
-            raw_json = re.sub(r'```json\s*|```', '', input_match.group(1).strip())
-            tool_args = json.loads(raw_json)
+            tool_args = json.loads(json_str)
             
             # CƠ CHẾ HANDOFF AGENT
             if tool_name == "hand_off":
@@ -201,6 +230,10 @@ async def sre_tool_node(state: AgentState):
         observation = "Không tìm thấy định dạng Action / Action Input hợp lệ."
         
     new_history = state.get('history', '') + f"Observation: {observation}\n"
+    
+    if state.get("step_count", 0) >= 9:
+        new_history += "\n⚠️ HỆ THỐNG CẢNH BÁO: Bạn đã đạt giới hạn số lượng công cụ cho phép! BẮT BUỘC bạn phải tổng hợp tất cả thông tin tìm được và đưa ra kết luận bằng định dạng 'Final Answer:' ngay lập tức trong lượt tiếp theo!\n"
+
     
     MAX_HISTORY_CHARS = 16000
     if len(new_history) > MAX_HISTORY_CHARS:
@@ -281,6 +314,9 @@ async def process_with_multi_agent(user_prompt: str, session, llm, stream_output
         if "Final Answer:" in final_state.get("final_answer", ""):
             return final_state["final_answer"].split("Final Answer:")[1].strip()
         else:
-            return final_state.get("final_answer", "")
+            ans = final_state.get("final_answer", "")
+            if final_state.get("step_count", 0) >= 10:
+                ans += "\n\n⚠️ **CẢNH BÁO TỪ HỆ THỐNG:**\nAI đã chạm ngưỡng giới hạn thao tác nhưng chưa tự đưa ra kết luận cuối cùng. Quá trình tự động điều tra đã bị ngắt để tiết kiệm tài nguyên. Phía trên là suy luận dang dở của AI."
+            return ans
     except Exception as e:
         return f"Lỗi Multi-Agent Graph: {str(e)}"

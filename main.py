@@ -310,37 +310,57 @@ def get_k8s_nodes() -> str:
     except Exception as e:
         return f"Lỗi kết nối SSH tới Cluster: {str(e)}"
 
-# Tool 6: Công cụ lấy metrics từ Prometheus (Buff thêm sức mạnh để lấy dữ liệu chính xác và nhanh hơn)
+# Tool 6: Công cụ lấy metrics từ Prometheus bằng PromQL
 @mcp.tool()
-def fetch_metrics() -> str:
-    """Fetch real-time CPU and Memory usage from Prometheus."""
-    logger.info("Đang lấy chỉ số CPU và RAM từ Prometheus...")
+def query_prometheus(query_type: str = "cpu") -> str:
+    """
+    Công cụ truy vấn dữ liệu từ Prometheus. Tham số query_type có thể là:
+    - 'cpu': Lấy phần trăm CPU hiện tại.
+    - 'ram': Lấy phần trăm RAM hiện tại.
+    - Hoặc một câu lệnh PromQL bất kỳ (VD: 'rate(container_network_receive_bytes_total[5m])') để kiểm tra Network, Storage...
+    """
+    logger.info(f"📈 AI đang truy vấn Prometheus với query_type: {query_type}")
     
     # Sử dụng IP máy ảo Azure của ông
     prometheus_url = f"http://{AZURE_IP}:30003/api/v1/query"
     
-    # Câu lệnh PromQL lấy % CPU và RAM của toàn Cụm
-    cpu_query = '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
-    ram_query = '100 * (1 - ((avg_over_time(node_memory_MemFree_bytes[5m]) + avg_over_time(node_memory_Cached_bytes[5m]) + avg_over_time(node_memory_Buffers_bytes[5m])) / avg_over_time(node_memory_MemTotal_bytes[5m])))'
+    # 1. Các phím tắt (Macro) để AI không cần viết PromQL phức tạp
+    if query_type.lower() == "cpu":
+        promql = '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
+    elif query_type.lower() == "ram":
+        promql = '100 * (1 - ((avg_over_time(node_memory_MemFree_bytes[5m]) + avg_over_time(node_memory_Cached_bytes[5m]) + avg_over_time(node_memory_Buffers_bytes[5m])) / avg_over_time(node_memory_MemTotal_bytes[5m])))'
+    elif query_type.lower() == "storage":
+        promql = '100 - (avg(node_filesystem_avail_bytes{mountpoint="/"}) / avg(node_filesystem_size_bytes{mountpoint="/"}) * 100)'
+    elif query_type.lower() == "network":
+        promql = 'sum(rate(node_network_receive_bytes_total[5m]))'
+    else:
+        # 2. Chạy PromQL tự do do AI tự nghĩ ra
+        promql = query_type
 
     try:
-        # Lấy CPU
-        res_cpu = requests.get(prometheus_url, params={'query': cpu_query}, timeout=10)
-        cpu_data = res_cpu.json()['data']['result']
-        cpu_usage = float(cpu_data[0]['value'][1]) if cpu_data else 0
-
-        # Lấy RAM
-        res_ram = requests.get(prometheus_url, params={'query': ram_query}, timeout=10)
-        ram_data = res_ram.json()['data']['result']
-        ram_usage = float(ram_data[0]['value'][1]) if ram_data else 0
-
-        metric_report = f"🔥 Chỉ số hệ thống hiện tại:\n- CPU Usage: {cpu_usage:.2f}%\n- Memory Usage: {ram_usage:.2f}%"
-        logger.info(f"✅ Lấy metrics thành công: CPU {cpu_usage:.2f}%, RAM {ram_usage:.2f}%")
-        return metric_report
-
+        response = requests.get(prometheus_url, params={'query': promql}, timeout=10)
+        data = response.json()
+        
+        if data.get('status') == 'success':
+            results = data['data']['result']
+            if not results:
+                return f"Không tìm thấy dữ liệu cho truy vấn này. (Gợi ý: Nếu dùng phím tắt {query_type}, có thể node_exporter trên Jenkins VM không được cấu hình để gửi metric này)"
+            
+            # Nếu là CPU, RAM, Storage thì format % cho đẹp
+            if query_type.lower() in ["cpu", "ram", "storage"]:
+                val = float(results[0]['value'][1])
+                return f"🔥 Chỉ số {query_type.upper()} Usage hiện tại: {val:.2f}%"
+            elif query_type.lower() == "network":
+                val = float(results[0]['value'][1])
+                mb_s = val / (1024 * 1024)
+                return f"🔥 Tốc độ mạng tải xuống (Network Receive) hiện tại: {mb_s:.2f} MB/s"
+            else:
+                return f"Kết quả PromQL: {json.dumps(results[:5], indent=2)}"
+        else:
+            return f"❌ Lỗi truy vấn Prometheus: {data.get('error', 'Unknown Error')}"
     except Exception as e:
-        logger.error(f"Lỗi khi lấy dữ liệu Prometheus: {str(e)}")
-        return f"Không thể lấy chỉ số từ Prometheus: {str(e)}"
+        logger.error(f"Lỗi khi truy vấn Prometheus: {str(e)}")
+        return f"❌ Không thể kết nối tới Prometheus: {str(e)}"
 
 # Tool 7: AI tự động kích hoạt Jenkins và đợi lấy thành quả
 @mcp.tool()
@@ -556,7 +576,7 @@ def restart_pod(pod_name: str, namespace: str = "default") -> str:
     """""
     Khởi động lại một Pod.
     CẢNH BÁO: CHỈ DÙNG khi Pod bị treo ngẫu nhiên.
-    TUYỆT ĐỐI CẤM SỬ DỤNG nếu Pod đang ở trạng thái CrashLoopBackOff, Error, hoặc ErrImagePull.
+    TUYỆT ĐỐI CẤM SỬ DỤNG nếu Pod đang ở trạng thái CrashLoopBackOff, Error, ErrImagePull, hoặc ImagePullBackOff. Thay vào đó hãy dùng lệnh rollback!
     """
     logger.info(f"🔄 AI đang RESTART Pod: {pod_name}")
     try:
@@ -584,7 +604,7 @@ def scale_deployment(deployment_name: str, replicas: int, namespace: str = "defa
 def rollback(deployment_name: str, namespace: str = "default") -> str:
     """
     Khôi phục (Undo/Rollback) Deployment về phiên bản hoạt động trước nếu phát hiện lỗi CRASH.
-    BẮT BUỘC PHẢI SỬ DỤNG ngay lập tức khi phát hiện lỗi CrashLoopBackOff hoặc cấu hình sai lan rộng khiến Pod mới không thể khởi động.
+    BẮT BUỘC PHẢI SỬ DỤNG NGAY LẬP TỨC để Auto-Remediation khi phát hiện các lỗi ImagePullBackOff, ErrImagePull, hoặc CrashLoopBackOff lan rộng khiến hệ thống tê liệt.
     """
     logger.info(f"⏪ AI đang ROLLBACK Deployment: {deployment_name}")
     try:
@@ -592,6 +612,31 @@ def rollback(deployment_name: str, namespace: str = "default") -> str:
         return f"✅ Đã rollback Deployment '{deployment_name}' thành công.\nLog: {result.stdout.strip()}"
     except subprocess.CalledProcessError as e:
         return f"❌ Lỗi rollback: {e.stderr}"
+
+# Tool 15: Kiểm tra tài nguyên CPU/RAM của từng Pod
+@mcp.tool()
+def get_pod_metrics(namespace: str = "default") -> str:
+    """Liệt kê tài nguyên CPU/RAM đang tiêu thụ của từng Pod trong namespace. Hữu ích để tìm xem Pod nào đang làm quá tải Node."""
+    logger.info(f"📊 AI đang kiểm tra tài nguyên các Pod (namespace: {namespace})")
+    try:
+        result = _run_ssh_kubectl(["top", "pods", "-n", namespace])
+        return f"--- KẾT QUẢ CPU/RAM CỦA CÁC POD ({namespace}) ---\n" + result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        return f"❌ Lỗi lấy thông tin tài nguyên Pod: {e.stderr}"
+
+# Tool 16: Phân tích nguyên nhân sâu xa lỗi của một Pod (Events)
+@mcp.tool()
+def describe_pod(pod_name: str, namespace: str = "default") -> str:
+    """Xem chi tiết trạng thái và các sự kiện (Events) của Pod để tìm nguyên nhân tại sao Pod bị Crash, Pending hoặc OOMKilled."""
+    logger.info(f"🔎 AI đang chuẩn đoán chuyên sâu Pod: {pod_name}")
+    try:
+        result = _run_ssh_kubectl(["describe", "pod", pod_name, "-n", namespace])
+        # Chỉ lấy 40 dòng cuối cùng vì describe rất dài, phần Events quan trọng thường nằm ở cuối
+        output_lines = result.stdout.strip().split('\n')
+        tail_output = "\n".join(output_lines[-40:])
+        return f"--- KẾT QUẢ CHUẨN ĐOÁN (40 dòng cuối) ---\n" + tail_output
+    except subprocess.CalledProcessError as e:
+        return f"❌ Lỗi truy xuất thông tin Pod: {e.stderr}"
 
 if __name__ == "__main__":
     mcp.run()
