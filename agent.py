@@ -696,11 +696,15 @@ async def run_chatbot(user_prompt: str):
 1. LUÔN giao tiếp bằng TIẾNG VIỆT. Trả lời trực tiếp, không vòng vo.
 2. CHỈ ĐƯỢC GỌI 1 TOOL trong mỗi lượt. Đợi kết quả rồi mới gọi tiếp.
 3. QUY TẮC THÉP: Không được dùng 'Final Answer' trong cùng lượt với 'Action'.
+4. Thought tối đa 2 câu: câu 1 nêu kết quả vừa nhận, câu 2 nêu tool sẽ gọi tiếp. KHÔNG phân tích dài trong Thought.
+5. Ngay khi đã có đủ dữ liệu để trả lời → viết Final Answer ngay, KHÔNG gọi thêm bất kỳ tool nào nữa.
 
 === DANH SÁCH TOOLS ===
 [JENKINS - CI/CD]
 - get_build_overview: {"job_name": "tên-job", "build_number": "lastBuild hoặc số nguyên"}
   → Xem bảng tóm tắt tất cả stages (status, thời gian). LUÔN gọi tool này TRƯỚC khi gọi get_jenkins_logs.
+  → Nếu người dùng nói số build cụ thể (vd: "build 72") → dùng 72 NGAY, KHÔNG gọi thêm lần nào với lastBuild.
+  → Chỉ gọi tool này 1 LẦN DUY NHẤT cho mỗi câu hỏi.
 - get_jenkins_logs: {"job_name": "tên-job", "build_number": "lastBuild hoặc số nguyên", "target_stage": "Tên Stage cụ thể"}
   → Lấy log chi tiết. BẮT BUỘC truyền target_stage = tên stage bị FAILED (lấy từ get_build_overview).
 
@@ -731,13 +735,14 @@ Khi người dùng yêu cầu điều tra Jenkins build:
 
   ► LOẠI LỖI: Security Scan (Trivy / Checkov / SonarQube)
     Trivy báo CVE trong OS package (libssl, libgnutls, libc, sqlite, perl, zlib...):
-      1. Đọc Jenkinsfile (weather-app/Jenkinsfile hoặc Jenkinsfile) để xem lệnh Trivy: tìm flag --exit-code, --severity, --ignore-unfixed
-      2. Đọc Dockerfile để xem dòng FROM (tên base image hiện tại)
-      3. Nhận diện: CVE trong OS package = lỗi từ BASE IMAGE, KHÔNG ĐỌC requirements.txt — hoàn toàn không liên quan
-      4. Đối chiếu: Sau khi đọc Jenkinsfile và Dockerfile, xác định rõ "đã fix chưa":
+      Chỉ gọi ĐÚNG 2 tool theo thứ tự, không hơn:
+      1. read_project_file("weather-app/Jenkinsfile") → tìm flag --ignore-unfixed trong lệnh Trivy
+      2. read_project_file("weather-app/Dockerfile") → tìm dòng FROM (base image hiện tại)
+      SAU BƯỚC 2: viết Final Answer ngay, KHÔNG gọi list_directory, KHÔNG gọi requirements.txt, KHÔNG gọi tool nào thêm.
+      Đối chiếu để kết luận "đã fix chưa":
          - Jenkinsfile có --ignore-unfixed chưa? → Nếu chưa = CHƯA FIX
          - Dockerfile có cập nhật base image chưa? → Nếu vẫn là image cũ = CHƯA FIX
-      5. Fix đúng: Đề xuất thêm --ignore-unfixed vào lệnh Trivy (trong Jenkinsfile) HOẶC cập nhật base image lên phiên bản mới hơn (trong Dockerfile dòng FROM)
+      Fix đúng: Đề xuất thêm --ignore-unfixed vào lệnh Trivy (trong Jenkinsfile) HOẶC cập nhật base image lên phiên bản mới hơn (trong Dockerfile dòng FROM)
     Trivy báo CVE trong pip package (requests, cryptography...):
       1. Đọc requirements.txt để xem phiên bản hiện tại của package đó
       2. Fix: Tăng version của package lên bản đã vá lỗi

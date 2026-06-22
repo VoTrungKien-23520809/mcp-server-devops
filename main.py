@@ -139,7 +139,7 @@ def get_jenkins_logs(job_name: str, build_number: str = "lastBuild", target_stag
 
     base_url = JENKINS_URL.rstrip('/')
     auth = (JENKINS_USER, JENKINS_TOKEN)
-    MAX_LOG_CHARS = 8000
+    MAX_LOG_CHARS = 4000
 
     # ============================================================
     # LAYER 1: Jenkins Pipeline wfapi — Lấy log chính xác theo node
@@ -189,6 +189,20 @@ def get_jenkins_logs(job_name: str, build_number: str = "lastBuild", target_stag
                         node_log_json = session.get(log_url, auth=auth, timeout=10).json()
                         node_text = node_log_json.get("text", "").strip()
 
+                        if not node_text:
+                            continue
+
+                        # Lọc bỏ các dòng noise của Trivy (DB download, legend, separator)
+                        _noise_prefixes = (
+                            "Downloading", "Fetching", "Loading", "Updating",
+                            "Legend:", "- K =", "- U =", "- F =", "- D =", "- L =",
+                            "────", "━━━━", "════",
+                        )
+                        filtered_lines = [
+                            ln for ln in node_text.splitlines()
+                            if not any(ln.strip().startswith(p) for p in _noise_prefixes)
+                        ]
+                        node_text = "\n".join(filtered_lines).strip()
                         if not node_text:
                             continue
 
