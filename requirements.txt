@@ -1,5 +1,12 @@
 mcp
 mcp[cli]
-pytest
 requests
 python-dotenv
+langchain-ollama
+langchain-core
+langgraph
+fastapi
+uvicorn
+pyngrok
+psutil
+prompt_toolkit
