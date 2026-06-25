@@ -13,6 +13,17 @@ def get_k8s_nodes() -> str:
 
 
 @mcp.tool()
+def get_all_pods() -> str:
+    """Xem danh sách TẤT CẢ các Pods đang chạy trên TẤT CẢ namespaces trong toàn bộ hệ thống K8s. Rất hữu ích khi không biết rõ ứng dụng đang nằm ở namespace nào hoặc tên chính xác của Pod là gì."""
+    logger.info(f"🌍 AI đang liệt kê toàn bộ Pods trên tất cả namespaces (-A)")
+    try:
+        result = _run_ssh_kubectl(["get", "pods", "-A", "-o", "wide"])
+        return f"Dữ liệu tất cả Pods trong hệ thống (Tên Namespace ở cột đầu tiên):\n{result.stdout.strip()}"
+    except Exception as e:
+        return f"Lỗi khi liệt kê tất cả Pods: {str(e)}"
+
+
+@mcp.tool()
 def get_app_logs(namespace: str = "default", label_selector: str = "app=weather-app") -> str:
     """Fetch the last 50 lines of logs from a specific application pod in Kubernetes."""
     logger.info(f"🔍 Đang kéo log của ứng dụng có nhãn {label_selector} trong namespace '{namespace}'...")
